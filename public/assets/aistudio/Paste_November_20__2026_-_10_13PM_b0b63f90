@@ -1,0 +1,751 @@
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DEVMIND AI: COMPLETE BUILD PROMPT
+The Autonomous AI Software Engineering Platform
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ROLE
+You are a senior staff engineer and product architect. Build "DevMind AI", a production-grade desktop SaaS app that understands, analyzes, modifies, tests and maintains full software repositories. Work in the numbered build order in Section 22. Finish and verify each step before starting the next. Never claim a step is done unless it compiles, runs and its tests pass. Ask me only if something is truly blocking; otherwise state your assumption in one line and continue.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 1: PRODUCT DEFINITION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Name: DevMind AI
+Tagline: Understand. Analyze. Debug. Build. Test. Deploy.
+Category: Developer Tools / AI Software Engineering
+Platform: Desktop app (Windows 11 first, then macOS, then Linux)
+Model: Full production SaaS (Freemium, Pro, Team, Enterprise)
+AI autonomy: Fully autonomous planning and execution WITHIN permitted actions, with approval checkpoints for risky ones
+AI models: API-based only (provider-agnostic gateway)
+Core purpose: Repository understanding and autonomous software development
+
+Example user task the product must handle end to end:
+"Analyze my entire project, identify authentication vulnerabilities, fix them, generate unit tests, run the test suite and prepare a report."
+
+Agent flow for that task:
+1. Inspect the repository
+2. Understand the architecture
+3. Identify relevant files and dependencies
+4. Create an execution plan
+5. Request approval for restricted actions
+6. Modify source code
+7. Run tests in an isolated sandbox
+8. Analyze failures and retry within limits
+9. Review the final changes
+10. Present a complete execution report
+
+Hard rule: the system must NEVER report a task complete merely because the model produced code. Completion requires real test or verification results.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 2: TARGET USERS AND KPIs
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Users: individual developers, full-stack developers, AI/ML engineers, students, startups, dev teams, enterprises.
+
+KPIs to instrument (targets set during beta, not promised):
+- Initial indexing time
+- Verified bug-resolution rate
+- Accepted code-change rate
+- Test coverage improvement
+- Task completion success rate
+- Unauthorized action rate (must be ZERO)
+- Task completion time
+- Free-to-paid conversion
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 3: CORE MODULES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+M1 Repository Intelligence Engine: scanning, file indexing, dependency mapping, structure and architecture understanding
+M2 Code Intelligence Engine: static analysis, complexity, design patterns, maintainability
+M3 Autonomous Development Agent: planning, multi-file edits, command execution, testing, refactoring, orchestration
+M4 Intelligent Debugging: error analysis, stack traces, root cause, verified fixes
+M5 Testing Intelligence: unit and integration tests, execution, regression detection, coverage
+M6 Security Intelligence: dependency scanning, secret detection, insecure patterns, remediation
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 4: FUNCTIONAL REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+FR-01 Auth and accounts
+- Register and login, email verification, OAuth (GitHub, Google), password recovery
+- Profile, subscription and billing management
+- Workspace creation, session and device management
+
+FR-02 Project and repository management
+- Open local projects, import GitHub repos, connect multiple repos
+- Detect languages, frameworks, package managers
+- Scan directories, exclude configured folders (node_modules, .git, dist, build, venv, target)
+- Track changes and re-index modified files only (content-hash based)
+- Supported file types: .py .js .jsx .ts .tsx .java .cpp .c .cs .go .rs .php .rb .swift .kt .html .css .sql .json .yaml .md
+
+FR-03 Repository understanding
+- Repo summaries, entry points, class and function maps
+- Import and dependency analysis, API endpoint detection
+- Execution flow explanation, architecture diagrams
+- Natural-language code search, project-specific context
+
+FR-04 AI code assistant
+- NL code generation, code explanation, function and class generation
+- Language conversion, refactoring, performance optimization
+- SQL generation, architecture improvement suggestions
+
+FR-05 Autonomous coding
+- Accept objectives, break into subtasks, build execution plans
+- Select relevant files, edit multiple files
+- Run dev commands, install dependencies (approval required)
+- Run tests, diagnose failures, retry within configured limits
+- Produce a final change report
+
+FR-06 Debugging
+- Paste errors or import logs, capture terminal output
+- Analyze stack traces, identify root causes, locate code
+- Generate patches, run regression tests, compare before and after behavior
+
+FR-07 Code review
+- Review staged changes, detect smells and duplicates
+- Detect security issues, review naming and structure
+- Suggest performance improvements, generate review comments
+
+FR-08 Testing
+- Generate unit, integration and regression tests
+- Execute existing suites, identify failures, analyze coverage, produce reports
+
+FR-09 Documentation
+- README, API docs, function docs, architecture docs, database docs
+- Install guides, onboarding docs, release notes
+
+FR-10 Git and GitHub
+- Sync, branch management, commit history analysis, diffs
+- Commit message generation, PR preparation and review, issue analysis
+
+FR-11 Project memory
+- Remember architecture decisions and conventions
+- Track tasks, record past agent operations
+- Keep indexed repository versions, retrieve relevant past discussions
+
+FR-12 Approval and audit
+- Show proposed file changes and command plans
+- Request permission for privileged actions
+- Approve, reject or modify
+- Execution logs, rollback of tracked changes
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 5: UI / UX DESIGN SYSTEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Direction: dark-first, professional, minimal clutter, keyboard-first, resizable panels, multi-project workspace.
+
+COLOR TOKENS (define as CSS variables)
+- --bg-app:            #0D0F14   (charcoal, app background)
+- --bg-panel:          #151821   (neutral panel)
+- --bg-panel-raised:   #1C2030   (cards, menus)
+- --bg-editor:         #0F1117
+- --border-subtle:     #262B3A
+- --border-strong:     #353B50
+- --text-primary:      #E6E9F2
+- --text-secondary:    #A3AABF
+- --text-muted:        #6B728A
+- --accent-primary:    #6C7BFF   (blue-violet)
+- --accent-hover:      #8793FF
+- --accent-glow:       rgba(108,123,255,0.25)
+- --success:           #3DD68C
+- --warning:           #F5B84B
+- --danger:            #FF5C6C
+- --info:              #4DB8FF
+- --diff-add-bg:       rgba(61,214,140,0.14)
+- --diff-remove-bg:    rgba(255,92,108,0.14)
+- Severity: critical #FF3B4E, high #FF7A45, medium #F5B84B, low #4DB8FF, info #8A93AD
+
+TYPOGRAPHY
+- UI: Inter, 13px base, weights 400/500/600
+- Code and terminal: JetBrains Mono, 13px, line-height 1.6
+- Headings: 16/20/28px, weight 600
+
+SPACING AND SHAPE
+- 4px spacing scale (4, 8, 12, 16, 24, 32)
+- Radius: 6px controls, 10px cards, 14px modals
+- Panels separated by 1px var(--border-subtle)
+
+ANIMATION DURATIONS
+- Hover and focus transitions: 120ms ease-out
+- Button press: 80ms
+- Panel collapse and expand: 200ms cubic-bezier(0.2, 0.8, 0.2, 1)
+- Modal and command palette open: 180ms (fade + scale 0.97 to 1)
+- Modal close: 120ms
+- Toast in: 220ms slide from bottom-right, auto-dismiss 4000ms, out 160ms
+- Agent step status change: 250ms color crossfade
+- Streaming text cursor blink: 1000ms step-end
+- Skeleton shimmer loop: 1400ms linear
+- Progress bar fill: 300ms ease
+- Approval card pulse (pending): 2000ms ease-in-out, accent-glow
+- Respect prefers-reduced-motion: disable all non-essential animation
+
+MAIN LAYOUT (4 areas, all resizable, hideable, rearrangeable)
+- Left panel (default 260px): project and file navigation
+- Center panel: Monaco editor and diff views with tabs
+- Right panel (default 380px): AI agent chat, task plan, live progress, approvals
+- Bottom panel (default 240px): terminal, logs, test results
+
+KEYBOARD SHORTCUTS
+- Ctrl+K command palette
+- Ctrl+Shift+P agent command
+- Ctrl+J toggle AI panel
+- Ctrl+Shift+F project-wide search
+- Ctrl+Enter submit task
+- Ctrl+S save
+- Esc cancel current agent step / close overlays
+
+STATUS INDICATORS
+Task status chips: pending #8A93AD, planning #4DB8FF, awaiting_approval #F5B84B, running #6C7BFF, testing #B38CFF, completed #3DD68C, failed #FF5C6C, cancelled #6B728A.
+
+7 SCREENS
+S1 Welcome and onboarding: login, create account, connect GitHub, open local repo, create first workspace
+S2 Dashboard: recent projects, agent task history, repo health, recent activity, usage and API credits
+S3 Repository explorer: file tree, Monaco editor, symbol navigation, search and filters, Git status
+S4 AI engineering workspace: AI chat, task instructions, execution plan, live progress, file changes, approval requests
+S5 Debugging center: error logs, stack traces, root cause analysis, proposed fixes, test results
+S6 Security center: vulnerability findings, severity classification, dependency health, secret detection, remediation status
+S7 Agent execution history: task history, tool executions, command output, approval records, errors and retries
+
+NAVIGATION TREE
+- Dashboard
+- Workspaces: All Projects, Local Projects, GitHub Projects, Project Settings
+- Intelligence: Repository Brain, Code Analysis, Architecture Map, Semantic Search
+- AI Engineering: AI Chat, Autonomous Agent, Code Generator, Refactoring
+- Quality and Security: Debugging, Testing, Code Review, Security Scanner
+- GitHub: Branches, Commits, Pull Requests, Issues
+- Activity and History
+- Settings: AI Providers, Model Configuration, Agent Permissions, API Keys, Billing
+
+Accessibility: full keyboard navigation, visible focus ring (2px var(--accent-primary)), ARIA labels, WCAG AA contrast.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 6: TECH STACK (FINAL, DO NOT SUBSTITUTE)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Desktop shell: Tauri 2 (Rust system layer)
+- Desktop frontend: React + TypeScript, Tailwind CSS, shadcn/ui
+- Editor: Monaco Editor
+- Backend API: Python + FastAPI (REST + WebSocket)
+- Agent orchestration: LangGraph
+- AI access: provider-agnostic Model Gateway
+- Code parsing: Tree-sitter
+- Static analysis: Semgrep + language-specific analyzers
+- Embeddings: API-based
+- Vector DB: Qdrant
+- Primary DB: PostgreSQL
+- Cache and ephemeral task state: Redis
+- Background jobs: Celery or Temporal
+- File storage: S3-compatible
+- Code execution: Docker containers
+- Git: Git CLI + GitHub API
+- Deployment: Docker + Kubernetes
+- Monitoring: OpenTelemetry + Prometheus + Grafana
+- CI/CD: GitHub Actions; error tracking: Sentry
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 7: HYBRID ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Desktop app + cloud SaaS backend + external AI APIs + local execution.
+
+- Source code stays on the developer's machine by default. Only relevant context is sent to AI, over TLS.
+- Desktop layer: Tauri, React, Monaco, local scanner, Git, parser, indexer, Docker execution, terminal, file operations.
+- Cloud layer: FastAPI, auth, agent orchestration, billing, Model Gateway, RAG and retrieval, task orchestrator, security and policy engine, database services, usage and billing.
+- The backend NEVER assumes access to the user's filesystem. The desktop agent performs authorized local operations and sends only required context.
+- Communication: REST (standard ops), WebSocket (live agent events), HTTPS only, short-lived session tokens or signed requests, local IPC between Tauri frontend and privileged Rust commands.
+
+Repo structure:
+
+devmind-ai/
+  apps/
+    desktop/ (src/{components,pages,features,hooks,services,stores}, src-tauri/)
+    admin-dashboard/
+  services/
+    api-gateway/ auth-service/ repository-service/ indexing-service/
+    agent-service/ model-gateway/ billing-service/ security-service/
+  packages/
+    shared-types/ ui-components/ agent-protocol/ configuration/
+  infrastructure/
+    docker/ kubernetes/ monitoring/ migrations/
+  docs/
+    architecture/ api/ security/ product/
+  tests/
+
+OS strategy: Windows 11 first, macOS second, Linux third. Hide file access, terminal execution and secure storage behind a common desktop abstraction per OS.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 8: AI MODEL GATEWAY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do not hard-code one AI company. Implement a provider interface with adapters for OpenAI, Anthropic, Google Gemini and any OpenAI-compatible endpoint. Validate each provider's pricing, context window and tool-calling support before enabling it.
+
+Gateway responsibilities:
+1. API key management
+2. Provider selection
+3. Model routing by task complexity (cheap model for simple tasks, strong model for planning and debugging)
+4. Request normalization
+5. Token tracking
+6. Usage metering
+7. Cost estimation (per task, before running)
+8. Rate-limit handling
+9. Retry and timeout handling (exponential backoff, max 3 retries)
+10. Provider fallback
+11. Response validation (schema-check tool calls)
+12. Audit logging
+
+SECURITY RULES
+- Provider API keys are NEVER embedded in the desktop app.
+- Managed SaaS usage goes through the server-side gateway.
+- BYOK keys are stored only in the OS credential vault (Windows Credential Manager, macOS Keychain, Linux Secret Service).
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 9: REPOSITORY BRAIN (RAG)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+The most important component. It must understand relationships between files, not treat files as isolated text.
+
+INDEXING PIPELINE (incremental, background, non-blocking)
+1. Repository input (local dir or GitHub)
+2. File discovery with exclusions
+3. Language, framework and build-tool detection
+4. Tree-sitter AST parsing
+5. Semantic extraction (functions, classes, symbols, imports)
+6. Code-aware chunk generation
+7. Embedding generation (cached by content hash)
+8. Storage: Qdrant (vectors) + PostgreSQL (metadata)
+9. Knowledge graph construction
+
+CODE-AWARE CHUNKING
+Hierarchy: Repository, Module, File, Class, Function, Method, Code block, Documentation block. Never split by fixed text size alone.
+Each chunk stores: chunk_id, project_id, repository_version, file_path, language, symbol_name, symbol_type, start_line, end_line, content_hash, content, embedding, dependencies.
+
+HYBRID RETRIEVAL
+Combine: semantic vector search, BM25 keyword search, symbol and function lookup, dependency-graph traversal, metadata filtering, reranking.
+Example query: "Why is my login API returning 401?"
+Pipeline: understand the question, identify auth symbols, search files, retrieve routes and middleware, token validation logic, env config REFERENCES (never secret values), relevant tests, then rank, filter, build the prompt and produce an evidence-based answer with file and line citations.
+
+KNOWLEDGE GRAPH
+Edges: IMPORTS, CALLS, EXTENDS, IMPLEMENTS, USES, DEFINES, TESTS, DEPENDS_ON. Store in PostgreSQL (adjacency tables) with traversal helpers.
+
+CONTEXT BUILDER PRIORITY
+1. User's task
+2. Relevant code symbols
+3. Related source files
+4. Dependency relationships
+5. Existing coding conventions
+6. Relevant tests
+7. Architecture docs
+8. Previous project decisions
+Apply token budgeting and relevance scoring so prompts stay small.
+
+TENANT SAFETY
+Qdrant collections separated by tenant, workspace and project. Every retrieval applies authorization filters BEFORE returning code context.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 10: AUTONOMOUS AGENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Controlled multi-stage agent built on LangGraph. Logical roles (they may share LLM calls):
+- Planner: understands requests, creates plans
+- Repository: explores files and dependencies
+- Coding: generates and modifies code
+- Debugging: diagnoses errors
+- Testing: generates and runs tests
+- Security: inspects risks
+- Review: evaluates generated changes
+- Documentation: updates docs
+
+WORKFLOW GRAPH
+Developer Request -> Planner -> Repository Analysis -> Plan and Permission Check -> Coding (approved files only) -> Sandbox Execution -> Review and Validation -> Final Engineering Report (changes, test results, risks, git diff)
+
+PERMISSION POLICY (enforced by a policy engine on EVERY tool call)
+- Read project files: allowed inside selected workspace
+- Search repository: allowed
+- Generate code: allowed
+- Edit files: allowed inside configured workspace
+- Run approved tests: allowed
+- Run approved build commands: allowed
+- Install dependencies: APPROVAL REQUIRED
+- Arbitrary shell commands: APPROVAL REQUIRED
+- Delete files: APPROVAL REQUIRED
+- Change Git history: APPROVAL REQUIRED
+- Push to remote: APPROVAL REQUIRED
+- Create pull request: APPROVAL REQUIRED
+- Deploy to production: EXPLICIT APPROVAL REQUIRED
+- Access secrets: RESTRICTED, never exposed to the model
+
+SAFEGUARDS
+Command allowlists, execution timeouts, memory and CPU limits, network restrictions, workspace boundaries, file-change limits, cancellation, approval expiration (default 15 minutes), immutable audit events.
+
+FAILURE RECOVERY
+On failed patch: capture failure output, identify failing test, retrieve context, run Debugging role, generate corrective patch, re-run tests, enforce retry limit (default 3), roll back if needed, escalate to the developer when confidence is low. Never mark complete without passing verification.
+
+STREAMING RULE
+Stream concise task summaries, evidence, decisions and status. Do NOT stream private internal reasoning.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 11: DATABASE (POSTGRESQL + QDRANT + REDIS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Entity tree:
+Users -> Workspaces -> Projects -> (Repositories, RepositoryFiles, CodeChunks, ArchitectureNodes, AgentTasks -> (AgentSteps, ToolExecutions, Approvals), CodeReviews, TestRuns, SecurityFindings); Workspaces -> WorkspaceMembers; Users -> APIConnections, Subscriptions, UsageRecords.
+
+Tables (22): users, workspaces, workspace_members, projects, repositories, repository_snapshots, repository_files, code_symbols, code_chunks, agent_tasks, agent_steps, tool_executions, approvals, code_changes, test_runs, security_findings, code_reviews, project_memory, api_connections, usage_records, subscriptions, audit_logs.
+
+Core SQL (create as the first migration, then add the remaining tables in the same style):
+
+  CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+  CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    display_name VARCHAR(150),
+    password_hash TEXT,
+    status VARCHAR(30) DEFAULT 'active',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE workspaces (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(150) NOT NULL,
+    owner_id UUID NOT NULL REFERENCES users(id),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE workspace_members (
+    workspace_id UUID REFERENCES workspaces(id),
+    user_id UUID REFERENCES users(id),
+    role VARCHAR(30) NOT NULL DEFAULT 'member',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (workspace_id, user_id)
+  );
+
+  CREATE TABLE projects (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID NOT NULL REFERENCES workspaces(id),
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    local_path TEXT,
+    primary_language VARCHAR(50),
+    framework VARCHAR(100),
+    indexing_status VARCHAR(30) DEFAULT 'pending',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE repositories (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects(id),
+    provider VARCHAR(50),
+    remote_url TEXT,
+    default_branch VARCHAR(255),
+    last_commit_sha VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE agent_tasks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id UUID NOT NULL REFERENCES projects(id),
+    requested_by UUID NOT NULL REFERENCES users(id),
+    task_title TEXT NOT NULL,
+    task_description TEXT NOT NULL,
+    status VARCHAR(30) DEFAULT 'pending',
+    execution_mode VARCHAR(30) DEFAULT 'approval',
+    model_provider VARCHAR(100),
+    model_name VARCHAR(150),
+    estimated_cost NUMERIC(12,6),
+    actual_cost NUMERIC(12,6),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+  );
+
+  CREATE TABLE agent_steps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES agent_tasks(id),
+    step_number INTEGER NOT NULL,
+    agent_type VARCHAR(50),
+    action TEXT NOT NULL,
+    status VARCHAR(30) DEFAULT 'pending',
+    input_summary TEXT,
+    output_summary TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE approvals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES agent_tasks(id),
+    action_type VARCHAR(100) NOT NULL,
+    action_payload JSONB NOT NULL,
+    status VARCHAR(30) DEFAULT 'pending',
+    requested_at TIMESTAMPTZ DEFAULT NOW(),
+    decided_at TIMESTAMPTZ,
+    decided_by UUID REFERENCES users(id)
+  );
+
+  CREATE TABLE code_changes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES agent_tasks(id),
+    file_path TEXT NOT NULL,
+    change_type VARCHAR(30),
+    diff_text TEXT,
+    patch_hash VARCHAR(128),
+    status VARCHAR(30) DEFAULT 'proposed',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+  CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    workspace_id UUID REFERENCES workspaces(id),
+    actor_id UUID REFERENCES users(id),
+    event_type VARCHAR(100) NOT NULL,
+    resource_type VARCHAR(100),
+    resource_id UUID,
+    metadata JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
+Production DB requirements: foreign keys and indexes, tenant isolation (row-level checks on workspace_id), migrations (Alembic), soft deletes where appropriate, retention policies, encrypted provider credentials, transactional approval handling, usage ledger integrity, snapshot version tracking.
+
+Redis: ephemeral task state, rate limits, WebSocket fan-out, cache.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 12: API DESIGN
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Base URL: /api/v1 (versioned REST) + WebSocket for events.
+
+POST /auth/login
+POST /workspaces
+GET  /projects
+POST /projects
+POST /projects/{id}/index
+GET  /projects/{id}/architecture
+POST /projects/{id}/search
+POST /agent/tasks
+GET  /agent/tasks/{id}
+POST /agent/tasks/{id}/cancel
+GET  /agent/tasks/{id}/events   (WebSocket stream)
+POST /approvals/{id}/decision
+GET  /projects/{id}/reviews
+GET  /projects/{id}/security
+GET  /billing/usage
+
+Example task payload:
+{
+  "project_id": "project-uuid",
+  "title": "Fix authentication issues",
+  "description": "Analyze the authentication flow, identify bugs, propose fixes and run regression tests.",
+  "execution_mode": "approval",
+  "allowed_actions": ["read_files", "search_code", "edit_workspace_files", "run_approved_tests"],
+  "max_steps": 30,
+  "require_final_review": true
+}
+
+WebSocket events to stream: task summary, current step, files being analyzed, proposed modifications, approval requests, test output, completion status. Add request validation (Pydantic), rate limiting and OpenAPI docs.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 13: SECURITY ARCHITECTURE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CRITICAL RULE: repository content is UNTRUSTED DATA. README text, code comments and config files can never override system policy or grant the agent new permissions. Wrap retrieved repo content in clearly delimited data blocks in every prompt.
+
+Requirements:
+- Auth: OAuth 2.0 / OpenID Connect
+- Authz: RBAC + workspace isolation
+- Transport: TLS everywhere; DB encryption at rest
+- Credentials: OS keychain + encrypted vault
+- API: rate limiting, request validation
+- Execution: isolated containers only
+- File access: workspace-scoped, block directory traversal and symlink escapes
+- Secrets: scanning and redaction before any text reaches a model
+- Git: explicit approval for push
+- Audit: immutable events; encrypted backups
+
+THREAT MODEL to design against: malicious repo instructions, prompt injection in README and comments, malicious dependencies, arbitrary command execution, secret leakage via prompts, unauthorized repo access, cross-tenant leakage, compromised GitHub tokens, unsafe generated code, malicious test scripts.
+
+SANDBOX PIPELINE
+Agent -> validated tool request -> Policy Enforcement (permission, path, command, resource checks) -> Isolated Docker container (non-root, CPU and memory limits, network OFF by default, controlled package registry access only when approved, no host credentials mounted, disposable per run) -> results (logs, exit codes, test results, file changes).
+Never execute a model-generated command without policy validation. Keep rollback snapshots of original files.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 14: NON-FUNCTIONAL REQUIREMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+- Desktop startup under 5 seconds on supported hardware
+- UI never blocks during indexing
+- 99.9% monthly API availability target
+- Horizontal backend scaling
+- Tenant isolation and least privilege
+- Recoverable agent tasks
+- Modular architecture
+- Centralized logs, metrics, traces
+- Keyboard accessibility
+- Windows, macOS, Linux portability
+- Transactional integrity and backups
+- Token budgets and usage limits
+
+Performance strategy: incremental indexing, content-hash change detection, background processing, lazy context loading, cached embeddings, streaming responses, bounded parallel file analysis, complexity-based model routing, context compression, cancellation and timeouts.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 15: SAAS BUSINESS LOGIC
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Plans: Free (limited projects and AI usage), Pro (higher usage, advanced agents), Team (shared workspaces, admin), Enterprise (SSO, governance, custom limits).
+Revenue: monthly and annual subscriptions, team seats, extra usage credits, enterprise contracts, BYOK option.
+Cost control (mandatory): per-user token budgets, per-task cost estimate shown before running, model selection by complexity, cheap-model routing, context caching, max agent steps, usage alerts at 80% and 100%, workspace spending limits, billing and usage dashboards. NEVER offer unlimited AI usage without these controls.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 16: TESTING AND AI-AGENT EVALUATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+App tests: Vitest (frontend unit), React Testing Library (UI), Tauri test tooling (desktop), Pytest (backend), HTTPX (API), Playwright (E2E), Semgrep + Bandit (security), OSV-Scanner (dependencies), Locust or k6 (load), PostgreSQL integration tests.
+
+Agent evaluation suite (build as a reproducible benchmark with human-reviewed ground truth): bug-fixing tasks, multi-file refactors, feature implementation, test generation, repo-understanding questions, security vulnerability tasks, prompt-injection examples, failed-build recovery.
+Metrics: Task Success Rate, Patch Acceptance Rate, Test Pass Rate, Regression Rate, Tool Error Rate, Cost per Task, Approval Compliance.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 17: DEPLOYMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+API on Docker + Kubernetes; managed PostgreSQL; Qdrant; Redis; S3-compatible storage; Celery or Temporal; OCI registry; GitHub Actions CI/CD; Sentry; Prometheus + Grafana; OpenTelemetry logging; signed Windows installers with auto-update.
+Environments: development, testing, staging, production. Every production release passes automated tests, security checks and migration validation.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 18: DOCUMENTATION TO GENERATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+README.md, LICENSE, CONTRIBUTING.md, and docs/:
+01-Product-Requirements, 02-Software-Requirements-Specification, 03-System-Architecture, 04-UI-UX-Design, 05-Database-Design, 06-API-Documentation, 07-AI-RAG-Architecture, 08-Agent-Workflow, 09-Security-Architecture, 10-Testing-Strategy, 11-Deployment-Guide, 12-Development-Roadmap.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 19: KEY DIFFERENTIATORS (PROTECT THESE IN EVERY DECISION)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Persistent Repository Brain
+2. Multi-step autonomous engineering
+3. Permission-controlled execution
+4. Code relationship intelligence
+5. Provider-independent AI
+6. Engineering performance intelligence (quality, testing, AI spend tracking)
+
+Three foundational pillars: Repository Intelligence + Autonomous Coding + Sandboxed Testing.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 20: PRODUCTION ACCEPTANCE CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[ ] Desktop app installs and launches
+[ ] Secure registration and login
+[ ] Open local repositories
+[ ] Indexing finds files, symbols, dependencies
+[ ] AI answers using repository evidence
+[ ] AI generates multi-file patches
+[ ] Approval checkpoints block unauthorized operations
+[ ] Code runs only in the isolated sandbox
+[ ] Tests execute and return real results
+[ ] Agent recovers from bounded failures
+[ ] Changes and patches are reviewable in Git
+[ ] Security scanning detects configured vulnerability classes
+[ ] Provider usage and cost tracked
+[ ] Tenants are isolated
+[ ] Audit logs record sensitive operations
+[ ] Updates and production monitoring work
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 21: FIRST MILESTONE (BUILD THIS FIRST)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Do NOT build all phases at once. First deliver ONE end-to-end demo: AI-powered repository debugging.
+1. Open an existing Git repo in DevMind AI
+2. Scan and index the full project
+3. Ask the AI to explain the architecture
+4. Provide a real application error
+5. Identify the root cause using repo context
+6. Generate a proposed patch
+7. Review and approve the change
+8. Run relevant tests in Docker
+9. Show the final diff and execution report
+
+This validates repository intelligence, RAG, model integration, agent orchestration, file editing, permissions and sandboxed execution.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 22: NUMBERED BUILD ORDER (32 WEEKS, 8 PHASES)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+PHASE 1: FOUNDATION (Weeks 1-4)
+ 1. Scaffold the monorepo structure from Section 7
+ 2. Write the design tokens and base UI components from Section 5
+ 3. Build the Tauri 2 desktop shell with the 4-panel resizable layout
+ 4. Stand up FastAPI, PostgreSQL, Redis with Docker Compose
+ 5. Run the first migration (Section 11 SQL)
+ 6. Implement auth: register, login, email verification, OAuth, sessions
+ 7. Implement workspace and project management (CRUD, local project open)
+
+PHASE 2: REPOSITORY INTELLIGENCE (Weeks 5-8)
+ 8. Local repo scanner with exclusions and language detection
+ 9. Tree-sitter integration, AST, symbol and import extraction
+10. Dependency analysis and knowledge-graph tables
+11. Code-aware chunker with content hashing
+12. Qdrant integration, incremental re-indexing, indexing progress UI
+
+PHASE 3: MODEL GATEWAY AND RAG (Weeks 9-12)
+13. Provider interface and adapters (OpenAI, Anthropic, Gemini, compatible)
+14. Token tracking, cost estimation, retries, fallback
+15. Embedding pipeline with cache
+16. Hybrid retrieval (vector + BM25 + symbol + graph + rerank)
+17. Context builder with token budgeting
+18. Repository-aware AI chat with cited file and line evidence
+
+PHASE 4: AUTONOMOUS AGENT (Weeks 13-16)
+19. LangGraph orchestration and the planner
+20. Tool registry (read, search, edit, run tests)
+21. Policy engine and permission table from Section 10
+22. Approval engine and approval UI (pulse animation, expiry)
+23. File modification with rollback snapshots
+24. Agent execution history screen, WebSocket event stream
+
+>>> MILESTONE CHECK: the Section 21 demo must work end to end here <<<
+
+PHASE 5: ENGINEERING INTELLIGENCE (Weeks 17-20)
+25. Debugging center (stack trace analysis, root cause, patches)
+26. Automated code review
+27. Test generation and execution, coverage reports
+28. Code quality reports
+29. Documentation generation
+
+PHASE 6: SECURITY AND GITHUB (Weeks 21-24)
+30. Hardened Docker sandbox (non-root, limits, no network)
+31. Semgrep, dependency scanning, secret detection and redaction
+32. Security center UI
+33. Git and GitHub integration (branches, diffs, commit messages, PRs)
+34. Immutable audit logging
+
+PHASE 7: SAAS INFRASTRUCTURE (Weeks 25-28)
+35. Subscriptions, plans, billing
+36. Usage metering, budgets, alerts, dashboards
+37. Team workspaces and RBAC
+38. Monitoring (OpenTelemetry, Prometheus, Grafana, Sentry)
+39. Kubernetes manifests and CI/CD pipelines
+
+PHASE 8: PRODUCTION RELEASE (Weeks 29-32)
+40. Security assessment and prompt-injection testing
+41. Load testing
+42. Agent evaluation benchmark run and report
+43. Beta test and fixes
+44. Signed Windows installer with auto-update
+45. Generate all docs from Section 18, run the Section 20 checklist, launch
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+SECTION 23: RULES OF ENGAGEMENT
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Follow the build order. After each numbered step, run the build and tests, then give a 3-line status: done, verified how, next.
+2. Use the exact tech stack and color tokens above. No substitutions without telling me why.
+3. Write real, runnable code. No placeholders, no "TODO later" in core paths, no fake data in production paths.
+4. Add tests alongside each feature.
+5. Keep secrets out of code, logs and prompts. Use .env.example only.
+6. Commit in small steps with clear messages.
+7. When a requirement is ambiguous, pick the safest reasonable option, note the assumption in one line, and continue.
+8. Begin now with Phase 1, Step 1. Show the folder tree you created and the commands to run it.

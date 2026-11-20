@@ -1,0 +1,174 @@
+@import "tailwindcss";
+
+:root {
+  /* Section 5 Design System Color Tokens */
+  --bg-app: #0D0F14;
+  --bg-panel: #151821;
+  --bg-panel-raised: #1C2030;
+  --bg-editor: #0F1117;
+  --border-subtle: #262B3A;
+  --border-strong: #353B50;
+  --text-primary: #E6E9F2;
+  --text-secondary: #A3AABF;
+  --text-muted: #6B728A;
+  --accent-primary: #6C7BFF;
+  --accent-hover: #8793FF;
+  --accent-glow: rgba(108, 123, 255, 0.25);
+  --success: #3DD68C;
+  --warning: #F5B84B;
+  --danger: #FF5C6C;
+  --info: #4DB8FF;
+  --testing: #B38CFF;
+  --diff-add-bg: rgba(61, 214, 140, 0.14);
+  --diff-remove-bg: rgba(255, 92, 108, 0.14);
+
+  /* Severity Colors */
+  --severity-critical: #FF3B4E;
+  --severity-high: #FF7A45;
+  --severity-medium: #F5B84B;
+  --severity-low: #4DB8FF;
+  --severity-info: #8A93AD;
+
+  /* Radii */
+  --radius-control: 6px;
+  --radius-card: 10px;
+  --radius-modal: 14px;
+
+  /* Typography */
+  --font-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background-color: var(--bg-app);
+    color: var(--text-primary);
+    font-family: var(--font-ui);
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 0.005em;
+    overflow: hidden;
+  }
+
+  code, pre, .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  *:focus-visible {
+    outline: 2px solid var(--accent-primary);
+    outline-offset: 1px;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom subtle dark scrollbars */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-subtle);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--border-strong);
+}
+
+/* Section 5 Animation Durations */
+@keyframes approvalPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 var(--accent-glow), inset 0 0 0 1px rgba(245, 184, 75, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 18px 2px var(--accent-glow), inset 0 0 0 1px rgba(245, 184, 75, 0.85);
+  }
+}
+
+.approval-card-pulse {
+  animation: approvalPulse 2000ms ease-in-out infinite;
+}
+
+@keyframes cursorBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.streaming-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  background-color: var(--accent-primary);
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: cursorBlink 1000ms step-end infinite;
+}
+
+@keyframes skeletonShimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-panel-raised) 50%, var(--bg-panel) 75%);
+  background-size: 200% 100%;
+  animation: skeletonShimmer 1400ms linear infinite;
+}
+
+@keyframes modalIn {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.modal-animate-in {
+  animation: modalIn 180ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.toast-animate-in {
+  animation: toastIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+
+@keyframes lineHighlightFlash {
+  0% { background-color: rgba(108, 123, 255, 0.32); }
+  100% { background-color: transparent; }
+}
+
+.line-flash {
+  animation: lineHighlightFlash 1600ms ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

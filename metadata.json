@@ -1,0 +1,6 @@
+{
+  "name": "DevMind AI",
+  "description": "Autonomous AI software engineering platform with repository intelligence, approval-gated multi-file coding, and sandboxed test verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
