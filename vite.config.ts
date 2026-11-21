@@ -138,6 +138,9 @@ export default defineConfig(() => {
             if (id.includes('node_modules/react/') || id.includes('node_modules/react-dom/')) {
               return 'react-core';
             }
+            if (id.includes('node_modules/firebase/') || id.includes('node_modules/@firebase/')) {
+              return 'firebase-sdk';
+            }
             if (id.includes('node_modules/lucide-react/')) {
               return 'ui-icons';
             }
@@ -147,7 +150,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr: false,
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
   };

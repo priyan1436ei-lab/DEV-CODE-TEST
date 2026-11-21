@@ -67,6 +67,11 @@ import {
   type FirestoreTaskRecord,
   type FirestoreUserProfile,
 } from './services/firestoreSync';
+import {
+  getPendingSyncFileKeys,
+  offlineSaveFile,
+  scanOfflineSecurityFindings,
+} from './services/offlineStore';
 import type {
   AgentTask,
   AuditLogEntry,
@@ -149,6 +154,7 @@ export function App() {
   const [isMaximized, setIsMaximized] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [syncingOffline, setSyncingOffline] = useState(false);
+  const [pendingSyncFiles, setPendingSyncFiles] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
 
   const activeProjectIdRef = useRef(activeProjectId);
@@ -184,6 +190,8 @@ export function App() {
     setSyncingOffline(true);
     try {
       const result = await syncOfflineMutations();
+      const remainingKeys = await getPendingSyncFileKeys();
+      setPendingSyncFiles(remainingKeys);
       if (result.synced > 0) {
         const projRes = await devmindApi.listProjects();
         setProjects(dedupeById(projRes.projects));
@@ -199,6 +207,7 @@ export function App() {
   }, [showToast, syncingOffline]);
 
   useEffect(() => {
+    void getPendingSyncFileKeys().then(setPendingSyncFiles).catch(() => {});
     const onOnline = () => {
       void handleSyncOfflineQueue();
     };
@@ -521,8 +530,38 @@ export function App() {
   const handleSaveFile = useCallback(
     async (filePath: string, content: string) => {
       if (!activeProject) return;
+
+      // Intercept local code save operations when offline and route through IndexedDB
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        const updatedProject = await offlineSaveFile(
+          activeProject.id,
+          filePath,
+          content,
+          activeProject
+        );
+        const localFindings = scanOfflineSecurityFindings(updatedProject);
+        setProjects((prev) =>
+          dedupeById(prev.map((p) => (p.id === updatedProject.id ? updatedProject : p)))
+        );
+        setSecurityFindings(dedupeById(localFindings));
+        setPendingSyncFiles((prev) => {
+          const next = new Set(prev);
+          next.add(`${activeProject.id}:${filePath}`);
+          return next;
+        });
+        showToast(`Saved ${filePath} offline (pending-sync).`);
+        return;
+      }
+
       const res = await devmindApi.saveFile(activeProject.id, filePath, content);
       setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+      setPendingSyncFiles((prev) => {
+        const key = `${activeProject.id}:${filePath}`;
+        if (!prev.has(key)) return prev;
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
       const [secRes, extRes] = await Promise.all([
         devmindApi.getSecurityFindings(activeProject.id),
         devmindApi.getExtensionsHost(activeProject.id),
@@ -533,7 +572,7 @@ export function App() {
         syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch(() => {});
       }
     },
-    [activeProject]
+    [activeProject, showToast]
   );
 
   const handleCreateFile = async (filePath: string, content: string) => {
@@ -1292,6 +1331,9 @@ export function App() {
                   securityFindings.filter((s) => s.filePath === f.path && s.status === 'open').length +
                   (extensionHost?.diagnostics.filter((d) => d.filePath === f.path).length ?? 0);
 
+                const isPendingFile =
+                  Boolean(activeProject && pendingSyncFiles.has(`${activeProject.id}:${f.path}`)) ||
+                  f.syncStatus === 'pending-sync';
                 return (
                   <button
                     key={f.path}
@@ -1312,7 +1354,15 @@ export function App() {
                       <span className="truncate font-mono text-[11px]">{f.path}</span>
                     </span>
                     <span className="flex items-center gap-1 shrink-0 font-mono text-[10px]">
-                      {f.gitStatus === 'modified' && (
+                      {isPendingFile && (
+                        <span
+                          className="px-1 py-0.5 rounded-[2px] bg-[var(--status-warning)]/15 text-[var(--status-warning)] text-[9px] font-medium"
+                          title="Saved locally in IndexedDB — pending sync when online"
+                        >
+                          pending-sync
+                        </span>
+                      )}
+                      {f.gitStatus === 'modified' && !isPendingFile && (
                         <span className="text-[var(--status-warning)]">M</span>
                       )}
                       {fileIssueCount > 0 && (
@@ -1361,6 +1411,12 @@ export function App() {
                 file={activeFile}
                 highlightLine={highlightLine}
                 pendingDiff={pendingDiff}
+                isPendingSync={Boolean(
+                  activeProject &&
+                    activeFile &&
+                    (pendingSyncFiles.has(`${activeProject.id}:${activeFile.path}`) ||
+                      activeFile.syncStatus === 'pending-sync')
+                )}
                 securityFindings={securityFindings}
                 extensionDiagnostics={extensionHost?.diagnostics ?? []}
                 activeCommands={extensionHost?.activeCommands ?? []}

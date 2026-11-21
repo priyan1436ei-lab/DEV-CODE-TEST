@@ -33,6 +33,7 @@ interface CodeEditorViewProps {
   file: RepoFile | null;
   highlightLine: number | null;
   pendingDiff: CodeChange | null;
+  isPendingSync?: boolean;
   securityFindings: SecurityFinding[];
   extensionDiagnostics: ExtensionDiagnostic[];
   activeCommands: ActiveExtensionCommand[];
@@ -48,6 +49,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
   file,
   highlightLine,
   pendingDiff,
+  isPendingSync = false,
   securityFindings,
   extensionDiagnostics,
   activeCommands,
@@ -139,7 +141,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
       try {
         await onSaveFile(file.path, draft);
         lastServerContentRef.current = draft;
-        setSyncNotice('Synced');
+        setSyncNotice(typeof navigator !== 'undefined' && !navigator.onLine ? 'Saved (pending-sync)' : 'Synced');
       } catch (err) {
         setSyncNotice(err instanceof Error ? err.message : 'Sync failed');
       } finally {
@@ -155,7 +157,7 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
     try {
       await onSaveFile(file.path, draft);
       lastServerContentRef.current = draft;
-      setSyncNotice('Saved');
+      setSyncNotice(typeof navigator !== 'undefined' && !navigator.onLine ? 'Saved (pending-sync)' : 'Saved');
     } catch (err) {
       setSyncNotice(err instanceof Error ? err.message : 'Save failed');
     } finally {
@@ -290,7 +292,15 @@ export const CodeEditorView: React.FC<CodeEditorViewProps> = ({
               Unsaved
             </span>
           )}
-          {!isDirty && syncNotice && (
+          {!isDirty && isPendingSync && (
+            <span
+              className="px-1.5 py-0.5 rounded-[3px] border border-[var(--status-warning)]/40 bg-[var(--status-warning)]/15 text-[10px] font-mono font-medium text-[var(--status-warning)] shrink-0"
+              title="Saved locally in IndexedDB while offline — will sync when online"
+            >
+              pending-sync
+            </span>
+          )}
+          {!isDirty && !isPendingSync && syncNotice && (
             <span className="text-[11px] text-[var(--ink-muted)] shrink-0">· {syncNotice}</span>
           )}
           <span className="text-[11px] font-mono text-[var(--ink-muted)] hidden sm:inline">

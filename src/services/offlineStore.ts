@@ -34,6 +34,7 @@ export type OfflineMutation =
       projectId: string;
       path: string;
       content: string;
+      status: 'pending-sync';
       createdAt: string;
     }
   | {
@@ -41,6 +42,7 @@ export type OfflineMutation =
       type: 'deleteFile';
       projectId: string;
       path: string;
+      status: 'pending-sync';
       createdAt: string;
     }
   | {
@@ -53,6 +55,7 @@ export type OfflineMutation =
         files: Array<{ path: string; content: string }>;
       };
       tempProjectId: string;
+      status: 'pending-sync';
       createdAt: string;
     }
   | {
@@ -60,6 +63,7 @@ export type OfflineMutation =
       type: 'updateTaskPriority';
       taskId: string;
       priority: TaskPriority;
+      status: 'pending-sync';
       createdAt: string;
     };
 
@@ -282,6 +286,17 @@ export async function getPendingMutations(): Promise<OfflineMutation[]> {
 export async function getPendingMutationCount(): Promise<number> {
   const items = await getPendingMutations();
   return items.length;
+}
+
+export async function getPendingSyncFileKeys(): Promise<Set<string>> {
+  const items = await getPendingMutations();
+  const keys = new Set<string>();
+  for (const item of items) {
+    if (item.type === 'saveFile') {
+      keys.add(`${item.projectId}:${item.path}`);
+    }
+  }
+  return keys;
 }
 
 export async function removePendingMutation(id: number): Promise<void> {
@@ -552,9 +567,10 @@ export function rebuildProjectIndexLocally(project: Project): Project {
 export async function offlineSaveFile(
   projectId: string,
   filePath: string,
-  content: string
+  content: string,
+  fallbackProject?: Project
 ): Promise<Project> {
-  const existing = await getCachedProjectById(projectId);
+  const existing = (await getCachedProjectById(projectId)) ?? fallbackProject ?? null;
   if (!existing) {
     throw new Error('Project is not available in local offline cache yet.');
   }
@@ -570,6 +586,7 @@ export async function offlineSaveFile(
               lineCount: content.split('\n').length,
               contentHash: simpleHash(content),
               gitStatus: 'modified',
+              syncStatus: 'pending-sync',
               lastIndexedAt: now,
             }
           : f
@@ -584,6 +601,7 @@ export async function offlineSaveFile(
           lineCount: content.split('\n').length,
           contentHash: simpleHash(content),
           gitStatus: 'added',
+          syncStatus: 'pending-sync',
           lastIndexedAt: now,
         },
       ];
@@ -596,6 +614,7 @@ export async function offlineSaveFile(
     projectId,
     path: filePath,
     content,
+    status: 'pending-sync',
     createdAt: now,
   });
   return rebuilt;
@@ -614,6 +633,7 @@ export async function offlineDeleteFile(projectId: string, filePath: string): Pr
     type: 'deleteFile',
     projectId,
     path: filePath,
+    status: 'pending-sync',
     createdAt: new Date().toISOString(),
   });
   return rebuilt;
@@ -679,6 +699,7 @@ export async function offlineCreateProject(body: {
     type: 'createProject',
     body,
     tempProjectId: id,
+    status: 'pending-sync',
     createdAt: now,
   });
   return rebuilt;
@@ -778,6 +799,7 @@ export async function offlineUpdateTaskPriority(
     type: 'updateTaskPriority',
     taskId,
     priority,
+    status: 'pending-sync',
     createdAt: new Date().toISOString(),
   });
   return updated;

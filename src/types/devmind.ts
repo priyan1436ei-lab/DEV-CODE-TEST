@@ -71,6 +71,7 @@ export interface RepoFile {
   lineCount: number;
   contentHash: string;
   gitStatus?: 'clean' | 'modified' | 'added' | 'deleted';
+  syncStatus?: 'synced' | 'pending-sync';
   lastIndexedAt: string;
 }
 

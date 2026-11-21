@@ -9,8 +9,9 @@ npm install
 Write-Host "[2/4] Installing Electron & electron-builder..." -ForegroundColor Cyan
 npm install -D electron electron-builder
 
-Write-Host "[3/4] Building optimized Vite production bundle..." -ForegroundColor Cyan
+Write-Host "[3/4] Building optimized Vite production bundle & verifying Windows icons..." -ForegroundColor Cyan
 npm run build
+node scripts/ensure-win-icon.mjs
 
 Write-Host "[4/4] Packaging Windows NSIS Installer & Portable .exe..." -ForegroundColor Green
 npx electron-builder --win --x64 --config electron-builder.yml --publish never

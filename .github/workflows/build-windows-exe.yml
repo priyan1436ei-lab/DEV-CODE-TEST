@@ -27,6 +27,9 @@ jobs:
       - name: Build production web & PWA assets
         run: npm run build
 
+      - name: Ensure Windows icon resources exist
+        run: node scripts/ensure-win-icon.mjs
+
       - name: Build Windows Installer & Portable EXE (with optional Trusted CA Code Signing)
         shell: pwsh
         env:

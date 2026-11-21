@@ -5,19 +5,16 @@ compression: maximum
 publish: null
 asar: true
 asarUnpack:
-  - build/icon.ico
-  - build/icon.png
+  - electron/assets/**/*
   - server/**/*
   - server.ts
   - src/types/**/*
   - node_modules/tsx/**/*
   - node_modules/esbuild/**/*
 directories:
-  buildResources: build
+  buildResources: electron/assets
   output: dist-electron
 files:
-  - build/icon.ico
-  - build/icon.png
   - dist/**/*
   - server/**/*
   - server.ts
@@ -33,7 +30,7 @@ files:
   - "!firestore.rules.test.ts"
   - "!DRAFT_firestore.rules"
 win:
-  icon: build/icon.ico
+  icon: electron/assets/icon.ico
   signAndEditExecutable: true
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
   target:
@@ -46,9 +43,9 @@ win:
   requestedExecutionLevel: asInvoker
 nsis:
   artifactName: "${productName}-${version}-${os}-${arch}-Setup.${ext}"
-  installerIcon: build/icon.ico
-  uninstallerIcon: build/icon.ico
-  installerHeaderIcon: build/icon.ico
+  installerIcon: electron/assets/icon.ico
+  uninstallerIcon: electron/assets/icon.ico
+  installerHeaderIcon: electron/assets/icon.ico
   oneClick: false
   perMachine: false
   allowElevation: true

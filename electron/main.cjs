@@ -128,8 +128,18 @@ function getAppIconPath() {
 
   const candidates =
     process.platform === 'win32'
-      ? [path.join(rootDir, 'build', 'icon.ico'), path.join(rootDir, 'build', 'icon.png')]
-      : [path.join(rootDir, 'build', 'icon.png'), path.join(rootDir, 'build', 'icon.ico')];
+      ? [
+          path.join(rootDir, 'electron', 'assets', 'icon.ico'),
+          path.join(rootDir, 'electron', 'assets', 'icon.png'),
+          path.join(rootDir, 'build', 'icon.ico'),
+          path.join(rootDir, 'build', 'icon.png'),
+        ]
+      : [
+          path.join(rootDir, 'electron', 'assets', 'icon.png'),
+          path.join(rootDir, 'electron', 'assets', 'icon.ico'),
+          path.join(rootDir, 'build', 'icon.png'),
+          path.join(rootDir, 'build', 'icon.ico'),
+        ];
 
   return candidates.find((candidate) => fs.existsSync(candidate));
 }
