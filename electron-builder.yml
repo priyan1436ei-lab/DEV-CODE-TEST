@@ -2,16 +2,22 @@ appId: com.devmind.studio
 productName: DevMind Studio
 copyright: Copyright © 2026 DevMind Systems
 compression: maximum
+publish: null
 asar: true
 asarUnpack:
+  - build/icon.ico
+  - build/icon.png
   - server/**/*
   - server.ts
   - src/types/**/*
   - node_modules/tsx/**/*
   - node_modules/esbuild/**/*
 directories:
+  buildResources: build
   output: dist-electron
 files:
+  - build/icon.ico
+  - build/icon.png
   - dist/**/*
   - server/**/*
   - server.ts
@@ -19,7 +25,17 @@ files:
   - electron/**/*
   - firebase-applet-config.json
   - package.json
+  - "!data/**"
+  - "!.env*"
+  - "!src/assets/images/**"
+  - "!**/*.map"
+  - "!security_spec.md"
+  - "!firestore.rules.test.ts"
+  - "!DRAFT_firestore.rules"
 win:
+  icon: build/icon.ico
+  signAndEditExecutable: true
+  artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
   target:
     - target: nsis
       arch:
@@ -29,7 +45,10 @@ win:
         - x64
   requestedExecutionLevel: asInvoker
 nsis:
-  artifactName: DevMind-Studio-${version}-${arch}-Setup.${ext}
+  artifactName: "${productName}-${version}-${os}-${arch}-Setup.${ext}"
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
   oneClick: false
   perMachine: false
   allowElevation: true
@@ -40,4 +59,4 @@ nsis:
   deleteAppDataOnUninstall: false
   runAfterFinish: true
 portable:
-  artifactName: DevMind-Studio-${version}-${arch}-Portable.${ext}
+  artifactName: "${productName}-${version}-${os}-${arch}-Portable.${ext}"

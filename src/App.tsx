@@ -38,14 +38,17 @@ import { ExecutionHistoryView } from './components/ExecutionHistoryView';
 import { ExtensionsView } from './components/ExtensionsView';
 import { ImportRepoModal } from './components/ImportRepoModal';
 import { LoginGate } from './components/LoginGate';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { PWAInstallButton } from './components/PWAInstallButton';
 import { RepoBrainView } from './components/RepoBrainView';
 import { SecurityCenterView } from './components/SecurityCenterView';
 import { SettingsPolicyView } from './components/SettingsPolicyView';
-import { auth, signOutFirebase } from './firebase';
+import { auth, isFirestoreOfflineError, signOutFirebase } from './firebase';
 import {
   devmindApi,
   getStoredSessionToken,
   setStoredSessionToken,
+  syncOfflineMutations,
   type ProviderPreset,
 } from './services/api';
 import {
@@ -109,6 +112,7 @@ export function App() {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
   const [cloudProfile, setCloudProfile] = useState<FirestoreUserProfile | null>(null);
+  const [loadingCloudProfile, setLoadingCloudProfile] = useState(false);
   const [cloudExtensions, setCloudExtensions] = useState<FirestoreExtensionPref[]>([]);
   const [cloudTasks, setCloudTasks] = useState<FirestoreTaskRecord[]>([]);
   const [cloudProjects, setCloudProjects] = useState<FirestoreProjectSummary[]>([]);
@@ -144,6 +148,7 @@ export function App() {
   const [openMenu, setOpenMenu] = useState<MenuId>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
+  const [syncingOffline, setSyncingOffline] = useState(false);
   const [toast, setToast] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
 
   const activeProjectIdRef = useRef(activeProjectId);
@@ -160,11 +165,46 @@ export function App() {
     setToast({ text, tone });
   }, []);
 
+  const handleCloudError = useCallback((err: unknown) => {
+    if (isFirestoreOfflineError(err)) {
+      console.warn('Firestore temporarily unreachable; continuing in local mode until reconnected.');
+      return;
+    }
+    setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+  }, []);
+
   useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(null), 4000);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  const handleSyncOfflineQueue = useCallback(async () => {
+    if (syncingOffline || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
+    setSyncingOffline(true);
+    try {
+      const result = await syncOfflineMutations();
+      if (result.synced > 0) {
+        const projRes = await devmindApi.listProjects();
+        setProjects(dedupeById(projRes.projects));
+        showToast(
+          `Synced ${result.synced} offline change${result.synced === 1 ? '' : 's'} from IndexedDB.`
+        );
+      }
+    } catch {
+      // Remain queued until next reconnect
+    } finally {
+      setSyncingOffline(false);
+    }
+  }, [showToast, syncingOffline]);
+
+  useEffect(() => {
+    const onOnline = () => {
+      void handleSyncOfflineQueue();
+    };
+    window.addEventListener('online', onOnline);
+    return () => window.removeEventListener('online', onOnline);
+  }, [handleSyncOfflineQueue]);
 
   // Listen to Firebase Auth state changes
   useEffect(() => {
@@ -193,10 +233,12 @@ export function App() {
     let unsubTasks: (() => void) | undefined;
     let unsubProjects: (() => void) | undefined;
 
+    setLoadingCloudProfile(true);
     ensureUserProfile(firebaseUser, { theme })
       .then((profile) => {
         if (cancelled) return;
         setCloudProfile(profile);
+        setLoadingCloudProfile(false);
         setTheme(profile.theme);
 
         unsubProfile = subscribeUserProfile(
@@ -204,27 +246,28 @@ export function App() {
           (nextProfile) => {
             setCloudProfile(nextProfile);
           },
-          (err) => setFirestoreError(err)
+          handleCloudError
         );
         unsubExtensions = subscribeUserExtensions(
           firebaseUser.uid,
           (items) => setCloudExtensions(items),
-          (err) => setFirestoreError(err)
+          handleCloudError
         );
         unsubTasks = subscribeUserTaskRecords(
           firebaseUser.uid,
           (items) => setCloudTasks(items),
-          (err) => setFirestoreError(err)
+          handleCloudError
         );
         unsubProjects = subscribeUserProjects(
           firebaseUser.uid,
           (items) => setCloudProjects(items),
-          (err) => setFirestoreError(err)
+          handleCloudError
         );
       })
       .catch((err) => {
         if (!cancelled) {
-          setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+          setLoadingCloudProfile(false);
+          handleCloudError(err);
         }
       });
 
@@ -235,7 +278,7 @@ export function App() {
       unsubTasks?.();
       unsubProjects?.();
     };
-  }, [firebaseAuthReady, firebaseUser]);
+  }, [firebaseAuthReady, firebaseUser, handleCloudError]);
 
   // Apply Fluent Dark/Light class on root element
   useEffect(() => {
@@ -250,11 +293,9 @@ export function App() {
   const handleThemeChange = useCallback((nextTheme: 'dark' | 'light') => {
     setTheme(nextTheme);
     if (firebaseUidRef.current) {
-      updateUserProfilePrefs(firebaseUidRef.current, { theme: nextTheme }).catch((err) => {
-        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-      });
+      updateUserProfilePrefs(firebaseUidRef.current, { theme: nextTheme }).catch(handleCloudError);
     }
-  }, []);
+  }, [handleCloudError]);
 
   // Track Electron window maximize state
   useEffect(() => {
@@ -536,9 +577,7 @@ export function App() {
     setActiveFilePath(res.project.files[0]?.path ?? null);
     await refreshProjectData(res.project.id);
     if (firebaseUidRef.current) {
-      syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch((err) => {
-        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-      });
+      syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch(handleCloudError);
       updateUserProfilePrefs(firebaseUidRef.current, { activeProjectId: res.project.id }).catch(() => {});
     }
     setScreen('explorer');
@@ -552,9 +591,7 @@ export function App() {
     for (const id of ids) {
       const rec = host.extensions.find((e) => e.manifest.id === id);
       if (rec) {
-        syncExtensionPrefToFirestore(uid, rec).catch((err) => {
-          setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-        });
+        syncExtensionPrefToFirestore(uid, rec).catch(handleCloudError);
       }
     }
   };
@@ -621,9 +658,7 @@ export function App() {
     setTasks((prev) => dedupeById([res.task, ...prev]));
     setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
     if (firebaseUidRef.current) {
-      syncTaskRecordToFirestore(firebaseUidRef.current, res.task, activeProject.name).catch((err) => {
-        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-      });
+      syncTaskRecordToFirestore(firebaseUidRef.current, res.task, activeProject.name).catch(handleCloudError);
     }
     const [usageRes, secRes, extRes] = await Promise.all([
       devmindApi.getUsage(),
@@ -674,9 +709,7 @@ export function App() {
     const res = await devmindApi.updateTaskPriority(taskId, priority);
     setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
     if (firebaseUidRef.current) {
-      updateTaskPriorityInFirestore(firebaseUidRef.current, taskId, priority).catch((err) => {
-        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-      });
+      updateTaskPriorityInFirestore(firebaseUidRef.current, taskId, priority).catch(handleCloudError);
     }
   };
 
@@ -749,6 +782,8 @@ export function App() {
       <LoginGate
         firebaseUser={firebaseUser}
         firebaseAuthReady={firebaseAuthReady}
+        cloudProfile={cloudProfile}
+        loadingProfile={loadingCloudProfile}
         onAuthenticated={(token, nextSession, profile) => {
           setStoredSessionToken(token);
           setSession(nextSession);
@@ -816,9 +851,12 @@ export function App() {
         {/* Left: Brand + Desktop Menu Bar */}
         <div className="flex items-center gap-1 win-no-drag">
           <div className="flex items-center gap-2 px-1.5 mr-1">
-            <div className="w-5 h-5 rounded-[3px] bg-[var(--accent-primary)] text-[var(--accent-ink)] flex items-center justify-center">
-              <Code2 className="w-3.5 h-3.5" />
-            </div>
+            <img
+              src="/icon.png"
+              alt="DevMind Studio"
+              className="w-5 h-5 object-contain shrink-0"
+              draggable={false}
+            />
             <span className="text-xs font-semibold tracking-tight text-[var(--ink-primary)] hidden sm:inline">
               DevMind Studio
             </span>
@@ -1077,6 +1115,8 @@ export function App() {
           >
             <PanelRight className="w-3.5 h-3.5" />
           </button>
+
+          <PWAInstallButton />
 
           <button
             type="button"
@@ -1442,9 +1482,7 @@ export function App() {
                     updateUserProfilePrefs(firebaseUidRef.current, {
                       monthlyBudgetUsd: budgetUsd,
                       monthlyTokenLimit: tokenLimit,
-                    }).catch((err) => {
-                      setFirestoreError(err instanceof Error ? err : new Error(String(err)));
-                    });
+                    }).catch(handleCloudError);
                   }
                 }}
               />
@@ -1618,6 +1656,8 @@ export function App() {
         onClose={() => setImportModalOpen(false)}
         onImport={handleCreateProject}
       />
+
+      <OfflineIndicator syncing={syncingOffline} onSyncNow={() => void handleSyncOfflineQueue()} />
     </div>
   );
 }

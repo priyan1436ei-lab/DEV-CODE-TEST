@@ -6,7 +6,6 @@ import {
   Blocks,
   CheckCircle2,
   Cloud,
-  Code2,
   Eye,
   EyeOff,
   FolderGit2,
@@ -18,12 +17,15 @@ import {
 } from 'lucide-react';
 import { signInWithGoogle, signOutFirebase } from '../firebase';
 import { devmindApi, type ProviderPreset } from '../services/api';
-import { ensureUserProfile, type FirestoreUserProfile } from '../services/firestoreSync';
+import type { FirestoreUserProfile } from '../services/firestoreSync';
 import type { LlmProviderId, PublicUserSession } from '../types/devmind';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LoginGateProps {
   firebaseUser: User | null;
   firebaseAuthReady: boolean;
+  cloudProfile: FirestoreUserProfile | null;
+  loadingProfile: boolean;
   onAuthenticated: (
     token: string,
     session: PublicUserSession,
@@ -34,6 +36,8 @@ interface LoginGateProps {
 export const LoginGate: React.FC<LoginGateProps> = ({
   firebaseUser,
   firebaseAuthReady,
+  cloudProfile,
+  loadingProfile,
   onAuthenticated,
 }) => {
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
@@ -43,9 +47,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
 
-  const [cloudProfile, setCloudProfile] = useState<FirestoreUserProfile | null>(null);
   const [signingInGoogle, setSigningInGoogle] = useState(false);
-  const [loadingProfile, setLoadingProfile] = useState(false);
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -74,38 +76,13 @@ export const LoginGate: React.FC<LoginGateProps> = ({
       });
   }, []);
 
-  // Hydrate saved Firestore user preferences whenever Google user signs in
+  // Hydrate saved Firestore user preferences when cloudProfile arrives from App
   useEffect(() => {
-    if (!firebaseUser) {
-      setCloudProfile(null);
-      return;
-    }
-    let cancelled = false;
-    setLoadingProfile(true);
-    setError(null);
-    ensureUserProfile(firebaseUser, {
-      preferredProvider: provider,
-      preferredModel: model,
-      preferredBaseUrl: baseUrl,
-    })
-      .then((profile) => {
-        if (cancelled) return;
-        setCloudProfile(profile);
-        setProvider(profile.preferredProvider);
-        setModel(profile.preferredModel);
-        setBaseUrl(profile.preferredBaseUrl);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError(err instanceof Error ? err.message : 'Unable to load Firestore profile.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingProfile(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [firebaseUser]);
+    if (!cloudProfile) return;
+    setProvider(cloudProfile.preferredProvider);
+    setModel(cloudProfile.preferredModel);
+    setBaseUrl(cloudProfile.preferredBaseUrl);
+  }, [cloudProfile]);
 
   const currentPreset = presets.find((p) => p.id === provider);
 
@@ -139,7 +116,6 @@ export const LoginGate: React.FC<LoginGateProps> = ({
     setError(null);
     try {
       await signOutFirebase();
-      setCloudProfile(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to sign out.');
     }
@@ -201,9 +177,12 @@ export const LoginGate: React.FC<LoginGateProps> = ({
       {/* Top Desktop Header Strip */}
       <header className="h-11 px-5 border-b border-[var(--border-hairline)] bg-[var(--surface-sidebar)] flex items-center justify-between win-drag-region">
         <div className="flex items-center gap-2.5">
-          <div className="w-6 h-6 rounded-[4px] bg-[var(--accent-primary)] flex items-center justify-center text-[var(--accent-ink)]">
-            <Code2 className="w-3.5 h-3.5" />
-          </div>
+          <img
+            src="/icon.png"
+            alt="DevMind Studio"
+            className="w-6 h-6 object-contain shrink-0"
+            draggable={false}
+          />
           <span className="text-xs font-semibold tracking-tight text-[var(--ink-primary)]">
             DevMind Studio
           </span>
@@ -211,6 +190,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
         </div>
 
         <div className="flex items-center gap-3 text-[11px] text-[var(--ink-muted)] win-no-drag">
+          <PWAInstallButton />
           <span className="inline-flex items-center gap-1">
             <Cloud className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
             Firebase Auth & Firestore

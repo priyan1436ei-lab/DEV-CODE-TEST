@@ -14,6 +14,25 @@ import type {
   TaskPriority,
   UsageLedger,
 } from '../types/devmind';
+import {
+  cacheProjects,
+  cacheSingleProject,
+  cacheTasks,
+  getCachedProjectById,
+  getCachedProjects,
+  getCachedTasks,
+  getPendingMutations,
+  offlineCache,
+  offlineCreateProject,
+  offlineDeleteFile,
+  offlineFormatFile,
+  offlineSaveFile,
+  offlineSearchRepo,
+  offlineUpdateTaskPriority,
+  rebuildProjectIndexLocally,
+  removePendingMutation,
+  scanOfflineSecurityFindings,
+} from './offlineStore';
 
 export interface ProviderPreset {
   id: LlmProviderId;
@@ -35,6 +54,19 @@ export function getStoredSessionToken(): string | null {
 
 export function setStoredSessionToken(token: string | null): void {
   memorySessionToken = token;
+}
+
+function isNetworkFailure(err: unknown): boolean {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  if (err instanceof TypeError) return true;
+  const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+  return (
+    msg.includes('failed to fetch') ||
+    msg.includes('networkerror') ||
+    msg.includes('network request failed') ||
+    msg.includes('load failed') ||
+    msg.includes('offline')
+  );
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -64,8 +96,84 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+export async function syncOfflineMutations(): Promise<{ synced: number; remaining: number }> {
+  const queue = await getPendingMutations();
+  if (queue.length === 0) return { synced: 0, remaining: 0 };
+
+  let synced = 0;
+  const projectIdMap = new Map<string, string>();
+
+  for (const item of queue) {
+    if (item.id === undefined) continue;
+    try {
+      if (item.type === 'createProject') {
+        const res = await request<{ project: Project }>('/api/v1/projects', {
+          method: 'POST',
+          body: JSON.stringify(item.body),
+        });
+        projectIdMap.set(item.tempProjectId, res.project.id);
+        await cacheSingleProject(res.project);
+        await removePendingMutation(item.id);
+        synced += 1;
+      } else if (item.type === 'saveFile') {
+        const resolvedProjectId = projectIdMap.get(item.projectId) ?? item.projectId;
+        const res = await request<{ project: Project }>(
+          `/api/v1/projects/${resolvedProjectId}/files`,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ path: item.path, content: item.content }),
+          }
+        );
+        await cacheSingleProject(res.project);
+        await removePendingMutation(item.id);
+        synced += 1;
+      } else if (item.type === 'deleteFile') {
+        const resolvedProjectId = projectIdMap.get(item.projectId) ?? item.projectId;
+        const res = await request<{ project: Project }>(
+          `/api/v1/projects/${resolvedProjectId}/files`,
+          {
+            method: 'DELETE',
+            body: JSON.stringify({ path: item.path }),
+          }
+        );
+        await cacheSingleProject(res.project);
+        await removePendingMutation(item.id);
+        synced += 1;
+      } else if (item.type === 'updateTaskPriority') {
+        await request<{ task: AgentTask }>(`/api/v1/agent/tasks/${item.taskId}/priority`, {
+          method: 'PATCH',
+          body: JSON.stringify({ priority: item.priority }),
+        });
+        await removePendingMutation(item.id);
+        synced += 1;
+      }
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        break;
+      }
+      // Drop permanently invalid offline mutations (e.g. deleted task/project) so queue doesn't stall forever
+      await removePendingMutation(item.id);
+    }
+  }
+
+  const remaining = (await getPendingMutations()).length;
+  return { synced, remaining };
+}
+
 export const devmindApi = {
-  getPresets: () => request<{ presets: ProviderPreset[] }>('/api/v1/providers'),
+  getPresets: async () => {
+    try {
+      const res = await request<{ presets: ProviderPreset[] }>('/api/v1/providers');
+      void offlineCache.savePresets(res.presets);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await offlineCache.getPresets();
+        if (cached) return { presets: cached };
+      }
+      throw err;
+    }
+  },
 
   testLlmConnection: (body: {
     provider: LlmProviderId;
@@ -78,7 +186,7 @@ export const devmindApi = {
       { method: 'POST', body: JSON.stringify(body) }
     ),
 
-  login: (body: {
+  login: async (body: {
     displayName: string;
     email: string;
     provider: LlmProviderId;
@@ -86,13 +194,51 @@ export const devmindApi = {
     model: string;
     apiKey: string;
     localWorkspaceOnly?: boolean;
-  }) =>
-    request<{ token: string; session: PublicUserSession }>('/api/v1/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(body),
-    }),
+  }) => {
+    try {
+      const res = await request<{ token: string; session: PublicUserSession }>('/api/v1/auth/login', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      void offlineCache.saveSession(res.session);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cachedSession = await offlineCache.getSession();
+        const fallbackSession: PublicUserSession = cachedSession ?? {
+          sessionId: 'offline_session',
+          displayName: body.displayName || 'Developer',
+          email: body.email || 'offline@workspace.local',
+          llm: {
+            provider: body.provider,
+            baseUrl: body.baseUrl,
+            model: body.model,
+            hasApiKey: false,
+            maskedKey: '',
+            configured: false,
+          },
+          createdAt: new Date().toISOString(),
+        };
+        void offlineCache.saveSession(fallbackSession);
+        return { token: 'offline_token', session: fallbackSession };
+      }
+      throw err;
+    }
+  },
 
-  getSession: () => request<{ session: PublicUserSession }>('/api/v1/auth/session'),
+  getSession: async () => {
+    try {
+      const res = await request<{ session: PublicUserSession }>('/api/v1/auth/session');
+      void offlineCache.saveSession(res.session);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await offlineCache.getSession();
+        if (cached) return { session: cached };
+      }
+      throw err;
+    }
+  },
 
   updateLlmConfig: (body: {
     provider: LlmProviderId;
@@ -107,49 +253,155 @@ export const devmindApi = {
 
   logout: () => request<{ ok: boolean }>('/api/v1/auth/logout', { method: 'POST' }),
 
-  listProjects: () => request<{ projects: Project[] }>('/api/v1/projects'),
+  listProjects: async () => {
+    try {
+      const res = await request<{ projects: Project[] }>('/api/v1/projects');
+      void cacheProjects(res.projects);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await getCachedProjects();
+        return { projects: cached };
+      }
+      throw err;
+    }
+  },
 
-  createProject: (body: {
+  createProject: async (body: {
     name: string;
     description?: string;
     localPath?: string;
     files: Array<{ path: string; content: string }>;
-  }) => request<{ project: Project }>('/api/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+  }) => {
+    try {
+      const res = await request<{ project: Project }>('/api/v1/projects', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      void cacheSingleProject(res.project);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const project = await offlineCreateProject(body);
+        return { project };
+      }
+      throw err;
+    }
+  },
 
   deleteProject: (projectId: string) =>
     request<{ ok: boolean; projects: Project[] }>(`/api/v1/projects/${projectId}`, {
       method: 'DELETE',
     }),
 
-  reindexProject: (projectId: string) =>
-    request<{ project: Project }>(`/api/v1/projects/${projectId}/index`, { method: 'POST' }),
+  reindexProject: async (projectId: string) => {
+    try {
+      const res = await request<{ project: Project }>(`/api/v1/projects/${projectId}/index`, {
+        method: 'POST',
+      });
+      void cacheSingleProject(res.project);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const existing = await getCachedProjectById(projectId);
+        if (existing) {
+          const rebuilt = rebuildProjectIndexLocally(existing);
+          await cacheSingleProject(rebuilt);
+          await offlineCache.saveSecurity(projectId, scanOfflineSecurityFindings(rebuilt));
+          return { project: rebuilt };
+        }
+      }
+      throw err;
+    }
+  },
 
-  saveFile: (projectId: string, path: string, content: string) =>
-    request<{ project: Project }>(`/api/v1/projects/${projectId}/files`, {
-      method: 'PUT',
-      body: JSON.stringify({ path, content }),
-    }),
+  saveFile: async (projectId: string, path: string, content: string) => {
+    try {
+      const res = await request<{ project: Project }>(`/api/v1/projects/${projectId}/files`, {
+        method: 'PUT',
+        body: JSON.stringify({ path, content }),
+      });
+      void cacheSingleProject(res.project);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const project = await offlineSaveFile(projectId, path, content);
+        return { project };
+      }
+      throw err;
+    }
+  },
 
-  deleteFile: (projectId: string, path: string) =>
-    request<{ project: Project }>(`/api/v1/projects/${projectId}/files`, {
-      method: 'DELETE',
-      body: JSON.stringify({ path }),
-    }),
+  deleteFile: async (projectId: string, path: string) => {
+    try {
+      const res = await request<{ project: Project }>(`/api/v1/projects/${projectId}/files`, {
+        method: 'DELETE',
+        body: JSON.stringify({ path }),
+      });
+      void cacheSingleProject(res.project);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const project = await offlineDeleteFile(projectId, path);
+        return { project };
+      }
+      throw err;
+    }
+  },
 
-  searchRepo: (projectId: string, query: string) =>
-    request<{ hits: SearchHit[] }>(`/api/v1/projects/${projectId}/search`, {
-      method: 'POST',
-      body: JSON.stringify({ query }),
-    }),
+  searchRepo: async (projectId: string, query: string) => {
+    try {
+      return await request<{ hits: SearchHit[] }>(`/api/v1/projects/${projectId}/search`, {
+        method: 'POST',
+        body: JSON.stringify({ query }),
+      });
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const hits = await offlineSearchRepo(projectId, query);
+        return { hits };
+      }
+      throw err;
+    }
+  },
 
-  getSecurityFindings: (projectId: string) =>
-    request<{ findings: SecurityFinding[] }>(`/api/v1/projects/${projectId}/security`),
+  getSecurityFindings: async (projectId: string) => {
+    try {
+      const res = await request<{ findings: SecurityFinding[] }>(
+        `/api/v1/projects/${projectId}/security`
+      );
+      void offlineCache.saveSecurity(projectId, res.findings);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await offlineCache.getSecurity(projectId);
+        if (cached) return { findings: cached };
+        const proj = await getCachedProjectById(projectId);
+        return { findings: proj ? scanOfflineSecurityFindings(proj) : [] };
+      }
+      throw err;
+    }
+  },
 
   // Extensions Marketplace & Runtime Host
-  getExtensionsHost: (projectId?: string) =>
-    request<{ host: ExtensionHostSnapshot }>(
-      projectId ? `/api/v1/extensions?projectId=${encodeURIComponent(projectId)}` : '/api/v1/extensions'
-    ),
+  getExtensionsHost: async (projectId?: string) => {
+    try {
+      const res = await request<{ host: ExtensionHostSnapshot }>(
+        projectId
+          ? `/api/v1/extensions?projectId=${encodeURIComponent(projectId)}`
+          : '/api/v1/extensions'
+      );
+      void offlineCache.saveExtensionsHost(projectId, res.host);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached =
+          (await offlineCache.getExtensionsHost(projectId)) ??
+          (await offlineCache.getExtensionsHost(undefined));
+        if (cached) return { host: cached };
+      }
+      throw err;
+    }
+  },
 
   installExtension: (extensionId: string, projectId?: string) =>
     request<{ installedIds: string[]; host: ExtensionHostSnapshot }>(
@@ -175,22 +427,58 @@ export const devmindApi = {
       { method: 'POST', body: JSON.stringify({ projectId }) }
     ),
 
-  executeExtensionCommand: (commandId: string, projectId: string, filePath?: string) =>
-    request<{
-      ok: boolean;
-      extensionId: string;
-      commandId: string;
-      message: string;
-      mutatedFilePath?: string;
-      project?: Project;
-      host: ExtensionHostSnapshot;
-    }>('/api/v1/extensions/commands/execute', {
-      method: 'POST',
-      body: JSON.stringify({ commandId, projectId, filePath }),
-    }),
+  executeExtensionCommand: async (commandId: string, projectId: string, filePath?: string) => {
+    try {
+      const res = await request<{
+        ok: boolean;
+        extensionId: string;
+        commandId: string;
+        message: string;
+        mutatedFilePath?: string;
+        project?: Project;
+        host: ExtensionHostSnapshot;
+      }>('/api/v1/extensions/commands/execute', {
+        method: 'POST',
+        body: JSON.stringify({ commandId, projectId, filePath }),
+      });
+      if (res.project) void cacheSingleProject(res.project);
+      void offlineCache.saveExtensionsHost(projectId, res.host);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err) && filePath && commandId.toLowerCase().includes('format')) {
+        const project = await offlineFormatFile(projectId, filePath);
+        const host =
+          (await offlineCache.getExtensionsHost(projectId)) ??
+          (await offlineCache.getExtensionsHost(undefined));
+        if (host) {
+          return {
+            ok: true,
+            extensionId: 'offline-formatter',
+            commandId,
+            message: `Formatted ${filePath} locally (queued in IndexedDB).`,
+            mutatedFilePath: filePath,
+            project,
+            host,
+          };
+        }
+      }
+      throw err;
+    }
+  },
 
-  getChatHistory: (projectId: string) =>
-    request<{ messages: ChatMessage[] }>(`/api/v1/projects/${projectId}/chat`),
+  getChatHistory: async (projectId: string) => {
+    try {
+      const res = await request<{ messages: ChatMessage[] }>(`/api/v1/projects/${projectId}/chat`);
+      void offlineCache.saveChat(projectId, res.messages);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await offlineCache.getChat(projectId);
+        return { messages: cached ?? [] };
+      }
+      throw err;
+    }
+  },
 
   sendChatMessage: (projectId: string, message: string) =>
     request<{ reply: ChatMessage; messages: ChatMessage[] }>(`/api/v1/projects/${projectId}/chat`, {
@@ -198,8 +486,14 @@ export const devmindApi = {
       body: JSON.stringify({ message }),
     }),
 
-  getDebugAnalyses: (projectId: string) =>
-    request<{ analyses: DebugAnalysis[] }>(`/api/v1/projects/${projectId}/debug`),
+  getDebugAnalyses: async (projectId: string) => {
+    try {
+      return await request<{ analyses: DebugAnalysis[] }>(`/api/v1/projects/${projectId}/debug`);
+    } catch (err) {
+      if (isNetworkFailure(err)) return { analyses: [] };
+      throw err;
+    }
+  },
 
   runDebugAnalysis: (projectId: string, errorLog: string) =>
     request<{ analysis: DebugAnalysis }>(`/api/v1/projects/${projectId}/debug`, {
@@ -207,10 +501,23 @@ export const devmindApi = {
       body: JSON.stringify({ errorLog }),
     }),
 
-  listTasks: (projectId?: string) =>
-    request<{ tasks: AgentTask[] }>(
-      projectId ? `/api/v1/agent/tasks?projectId=${encodeURIComponent(projectId)}` : '/api/v1/agent/tasks'
-    ),
+  listTasks: async (projectId?: string) => {
+    try {
+      const res = await request<{ tasks: AgentTask[] }>(
+        projectId
+          ? `/api/v1/agent/tasks?projectId=${encodeURIComponent(projectId)}`
+          : '/api/v1/agent/tasks'
+      );
+      void cacheTasks(res.tasks);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const cached = await getCachedTasks(projectId);
+        return { tasks: cached };
+      }
+      throw err;
+    }
+  },
 
   createAgentTask: (body: {
     projectId: string;
@@ -224,11 +531,22 @@ export const devmindApi = {
       body: JSON.stringify(body),
     }),
 
-  updateTaskPriority: (taskId: string, priority: TaskPriority) =>
-    request<{ task: AgentTask }>(`/api/v1/agent/tasks/${taskId}/priority`, {
-      method: 'PATCH',
-      body: JSON.stringify({ priority }),
-    }),
+  updateTaskPriority: async (taskId: string, priority: TaskPriority) => {
+    try {
+      const res = await request<{ task: AgentTask }>(`/api/v1/agent/tasks/${taskId}/priority`, {
+        method: 'PATCH',
+        body: JSON.stringify({ priority }),
+      });
+      void cacheTasks([res.task]);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const task = await offlineUpdateTaskPriority(taskId, priority);
+        return { task };
+      }
+      throw err;
+    }
+  },
 
   decideApproval: (approvalId: string, decision: 'approve' | 'reject') =>
     request<{ task: AgentTask; project: Project; securityFindings: SecurityFinding[] }>(
@@ -245,7 +563,25 @@ export const devmindApi = {
   cancelTask: (taskId: string) =>
     request<{ task: AgentTask }>(`/api/v1/agent/tasks/${taskId}/cancel`, { method: 'POST' }),
 
-  getPolicies: () => request<{ policies: PermissionPolicyRule[]; presets: ProviderPreset[] }>('/api/v1/policies'),
+  getPolicies: async () => {
+    try {
+      const res = await request<{ policies: PermissionPolicyRule[]; presets: ProviderPreset[] }>(
+        '/api/v1/policies'
+      );
+      void offlineCache.savePolicies(res.policies);
+      void offlineCache.savePresets(res.presets);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const [policies, presets] = await Promise.all([
+          offlineCache.getPolicies(),
+          offlineCache.getPresets(),
+        ]);
+        return { policies: policies ?? [], presets: presets ?? [] };
+      }
+      throw err;
+    }
+  },
 
   updatePolicy: (actionType: string, level: PermissionLevel) =>
     request<{ policies: PermissionPolicyRule[] }>(`/api/v1/policies/${actionType}`, {
@@ -253,7 +589,24 @@ export const devmindApi = {
       body: JSON.stringify({ level }),
     }),
 
-  getUsage: () => request<{ usage: UsageLedger; presets: ProviderPreset[] }>('/api/v1/billing/usage'),
+  getUsage: async () => {
+    try {
+      const res = await request<{ usage: UsageLedger; presets: ProviderPreset[] }>(
+        '/api/v1/billing/usage'
+      );
+      void offlineCache.saveUsage(res.usage);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const [usage, presets] = await Promise.all([
+          offlineCache.getUsage(),
+          offlineCache.getPresets(),
+        ]);
+        if (usage) return { usage, presets: presets ?? [] };
+      }
+      throw err;
+    }
+  },
 
   updateBudget: (monthlyBudgetUsd: number, monthlyTokenLimit: number) =>
     request<{ usage: UsageLedger }>('/api/v1/billing/budget', {
@@ -261,5 +614,17 @@ export const devmindApi = {
       body: JSON.stringify({ monthlyBudgetUsd, monthlyTokenLimit }),
     }),
 
-  getAuditLogs: () => request<{ auditLogs: AuditLogEntry[] }>('/api/v1/audit'),
+  getAuditLogs: async () => {
+    try {
+      const res = await request<{ auditLogs: AuditLogEntry[] }>('/api/v1/audit');
+      void offlineCache.saveAuditLogs(res.auditLogs);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        const auditLogs = await offlineCache.getAuditLogs();
+        return { auditLogs: auditLogs ?? [] };
+      }
+      throw err;
+    }
+  },
 };

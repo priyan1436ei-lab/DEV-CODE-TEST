@@ -121,6 +121,19 @@ function stopBackend() {
   serverProcess = null;
 }
 
+function getAppIconPath() {
+  const rootDir = app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : path.resolve(__dirname, '..');
+
+  const candidates =
+    process.platform === 'win32'
+      ? [path.join(rootDir, 'build', 'icon.ico'), path.join(rootDir, 'build', 'icon.png')]
+      : [path.join(rootDir, 'build', 'icon.png'), path.join(rootDir, 'build', 'icon.ico')];
+
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
 async function createWindow() {
   const port = await findAvailablePort(3456);
   startBackend(port);
@@ -128,6 +141,7 @@ async function createWindow() {
   await waitForServer(`${baseUrl}/api/v1/health`);
 
   const state = loadWindowState();
+  const iconPath = getAppIconPath();
 
   mainWindow = new BrowserWindow({
     width: state.width,
@@ -138,6 +152,7 @@ async function createWindow() {
     frame: false,
     backgroundColor: '#181818',
     title: 'DevMind Studio',
+    ...(iconPath ? { icon: iconPath } : {}),
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),

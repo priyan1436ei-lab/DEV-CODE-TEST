@@ -100,7 +100,7 @@ service cloud.firestore {
         data.monthlyTokenLimit <= 1000000000 &&
         data.activeProjectId is string &&
         data.activeProjectId.size() <= 128 &&
-        data.activeProjectId.matches('^[a-zA-Z0-9_\\-]*$') &&
+        (data.activeProjectId == '' || isValidId(data.activeProjectId)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
     }

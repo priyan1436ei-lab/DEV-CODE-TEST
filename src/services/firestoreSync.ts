@@ -11,7 +11,7 @@ import {
   where,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../firebase';
+import { db, handleFirestoreError, isFirestoreOfflineError, OperationType } from '../firebase';
 import type {
   AgentTask,
   ExtensionRecord,
@@ -132,9 +132,49 @@ function sanitizeStatus(raw?: string): TaskStatus {
   return 'pending';
 }
 
+const docLocks = new Map<string, Promise<unknown>>();
+
+async function withDocLock<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const previous = docLocks.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(task);
+  const tracked = next.finally(() => {
+    if (docLocks.get(key) === tracked) {
+      docLocks.delete(key);
+    }
+  });
+  docLocks.set(key, tracked);
+  return next;
+}
+
+function buildFallbackProfile(
+  user: User,
+  uid: string,
+  defaults?: {
+    theme?: 'dark' | 'light';
+    preferredProvider?: LlmProviderId;
+    preferredModel?: string;
+    preferredBaseUrl?: string;
+  }
+): FirestoreUserProfile {
+  return {
+    uid,
+    displayName: clampString(user.displayName, 120, 'Developer'),
+    email: clampString(user.email, 254, 'user@workspace.local'),
+    photoURL: clampString(user.photoURL, 512, ''),
+    theme: defaults?.theme === 'light' ? 'light' : 'dark',
+    preferredProvider: sanitizeProvider(defaults?.preferredProvider),
+    preferredModel: clampString(defaults?.preferredModel, 120, 'gpt-4o-mini'),
+    preferredBaseUrl: clampString(defaults?.preferredBaseUrl, 256, 'https://api.openai.com/v1'),
+    monthlyBudgetUsd: 25,
+    monthlyTokenLimit: 5000000,
+    activeProjectId: '',
+  };
+}
+
 /**
  * Ensures the signed-in Google user's private profile document exists at /users/{uid}.
- * Adheres strictly to firebase-blueprint.json field constraints and server timestamps.
+ * Serialized per UID to prevent concurrent create/update races on first sign-in.
+ * Gracefully falls back to local profile defaults if Firestore is temporarily offline.
  */
 export async function ensureUserProfile(
   user: User,
@@ -147,69 +187,58 @@ export async function ensureUserProfile(
 ): Promise<FirestoreUserProfile> {
   const uid = sanitizeDocId(user.uid);
   const path = `users/${uid}`;
-  const ref = doc(db, 'users', uid);
 
-  let existingSnap;
-  try {
-    existingSnap = await getDoc(ref);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
+  return withDocLock(path, async () => {
+    const ref = doc(db, 'users', uid);
 
-  if (existingSnap.exists()) {
-    const data = existingSnap.data();
-    return {
-      uid,
-      displayName: clampString(data.displayName, 120, user.displayName || 'Developer'),
-      email: clampString(data.email, 254, user.email || 'user@workspace.local'),
-      photoURL: clampString(data.photoURL, 512, user.photoURL || ''),
-      theme: data.theme === 'light' ? 'light' : 'dark',
-      preferredProvider: sanitizeProvider(data.preferredProvider),
-      preferredModel: clampString(data.preferredModel, 120, 'gpt-4o-mini'),
-      preferredBaseUrl: clampString(data.preferredBaseUrl, 256, 'https://api.openai.com/v1'),
-      monthlyBudgetUsd: clampNumber(Number(data.monthlyBudgetUsd), 1, 100000, 25),
-      monthlyTokenLimit: clampNumber(Number(data.monthlyTokenLimit), 10000, 1000000000, 5000000),
-      activeProjectId: clampString(data.activeProjectId, 128, '').replace(/[^a-zA-Z0-9_\-]/g, ''),
+    let existingSnap;
+    try {
+      existingSnap = await getDoc(ref);
+    } catch (error) {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during get on ${path}; continuing with local profile defaults.`);
+        return buildFallbackProfile(user, uid, defaults);
+      }
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+
+    if (existingSnap.exists()) {
+      const data = existingSnap.data();
+      return {
+        uid,
+        displayName: clampString(data.displayName, 120, user.displayName || 'Developer'),
+        email: clampString(data.email, 254, user.email || 'user@workspace.local'),
+        photoURL: clampString(data.photoURL, 512, user.photoURL || ''),
+        theme: data.theme === 'light' ? 'light' : 'dark',
+        preferredProvider: sanitizeProvider(data.preferredProvider),
+        preferredModel: clampString(data.preferredModel, 120, 'gpt-4o-mini'),
+        preferredBaseUrl: clampString(data.preferredBaseUrl, 256, 'https://api.openai.com/v1'),
+        monthlyBudgetUsd: clampNumber(Number(data.monthlyBudgetUsd), 1, 100000, 25),
+        monthlyTokenLimit: clampNumber(Number(data.monthlyTokenLimit), 10000, 1000000000, 5000000),
+        activeProjectId: clampString(data.activeProjectId, 128, '').replace(/[^a-zA-Z0-9_\-]/g, ''),
+      };
+    }
+
+    const fallback = buildFallbackProfile(user, uid, defaults);
+
+    const profilePayload = {
+      ...fallback,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
     };
-  }
 
-  const resolvedTheme: 'dark' | 'light' = defaults?.theme === 'light' ? 'light' : 'dark';
+    try {
+      await setDoc(ref, profilePayload);
+    } catch (error) {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during create on ${path}; continuing with local profile defaults.`);
+        return fallback;
+      }
+      handleFirestoreError(error, OperationType.CREATE, path);
+    }
 
-  const profilePayload = {
-    uid,
-    displayName: clampString(user.displayName, 120, 'Developer'),
-    email: clampString(user.email, 254, 'user@workspace.local'),
-    photoURL: clampString(user.photoURL, 512, ''),
-    theme: resolvedTheme,
-    preferredProvider: sanitizeProvider(defaults?.preferredProvider),
-    preferredModel: clampString(defaults?.preferredModel, 120, 'gpt-4o-mini'),
-    preferredBaseUrl: clampString(defaults?.preferredBaseUrl, 256, 'https://api.openai.com/v1'),
-    monthlyBudgetUsd: 25,
-    monthlyTokenLimit: 5000000,
-    activeProjectId: '',
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  };
-
-  try {
-    await setDoc(ref, profilePayload);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
-
-  return {
-    uid: profilePayload.uid,
-    displayName: profilePayload.displayName,
-    email: profilePayload.email,
-    photoURL: profilePayload.photoURL,
-    theme: resolvedTheme,
-    preferredProvider: profilePayload.preferredProvider,
-    preferredModel: profilePayload.preferredModel,
-    preferredBaseUrl: profilePayload.preferredBaseUrl,
-    monthlyBudgetUsd: profilePayload.monthlyBudgetUsd,
-    monthlyTokenLimit: profilePayload.monthlyTokenLimit,
-    activeProjectId: profilePayload.activeProjectId,
-  };
+    return fallback;
+  });
 }
 
 export function subscribeUserProfile(
@@ -239,6 +268,10 @@ export function subscribeUserProfile(
       });
     },
     (error) => {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore listener offline on ${path}; will auto-reconnect.`);
+        return;
+      }
       try {
         handleFirestoreError(error, OperationType.GET, path);
       } catch (wrapped) {
@@ -297,6 +330,10 @@ export async function updateUserProfilePrefs(
   try {
     await updateDoc(ref, sanitized);
   } catch (error) {
+    if (isFirestoreOfflineError(error)) {
+      console.warn(`Firestore offline during update on ${path}; skipping cloud write.`);
+      return;
+    }
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
@@ -308,48 +345,63 @@ export async function syncExtensionPrefToFirestore(
   const safeUid = sanitizeDocId(uid);
   const docId = sanitizeDocId(ext.manifest.id);
   const path = `users/${safeUid}/extensions/${docId}`;
-  const ref = doc(db, 'users', safeUid, 'extensions', docId);
 
-  let snap;
-  try {
-    snap = await getDoc(ref);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
+  return withDocLock(path, async () => {
+    const ref = doc(db, 'users', safeUid, 'extensions', docId);
 
-  const safeExtId = clampString(ext.manifest.id, 128, docId).replace(/[^a-zA-Z0-9._\-]/g, '_');
-  const displayName = clampString(ext.manifest.displayName, 120, safeExtId);
-  const version = clampString(ext.manifest.version, 32, '1.0.0');
-
-  if (snap.exists()) {
+    let snap;
     try {
-      await updateDoc(ref, {
+      snap = await getDoc(ref);
+    } catch (error) {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during get on ${path}; skipping extension sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+
+    const safeExtId = clampString(ext.manifest.id, 128, docId).replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const displayName = clampString(ext.manifest.displayName, 120, safeExtId);
+    const version = clampString(ext.manifest.version, 32, '1.0.0');
+
+    if (snap.exists()) {
+      try {
+        await updateDoc(ref, {
+          displayName,
+          version,
+          installed: Boolean(ext.installed),
+          enabled: Boolean(ext.enabled),
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        if (isFirestoreOfflineError(error)) {
+          console.warn(`Firestore offline during update on ${path}; skipping extension sync.`);
+          return;
+        }
+        handleFirestoreError(error, OperationType.UPDATE, path);
+      }
+      return;
+    }
+
+    try {
+      await setDoc(ref, {
+        ownerId: safeUid,
+        extensionId: safeExtId,
         displayName,
         version,
         installed: Boolean(ext.installed),
         enabled: Boolean(ext.enabled),
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during create on ${path}; skipping extension sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
-    return;
-  }
-
-  try {
-    await setDoc(ref, {
-      ownerId: safeUid,
-      extensionId: safeExtId,
-      displayName,
-      version,
-      installed: Boolean(ext.installed),
-      enabled: Boolean(ext.enabled),
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  });
 }
 
 export function subscribeUserExtensions(
@@ -378,6 +430,10 @@ export function subscribeUserExtensions(
       onData(list);
     },
     (error) => {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore listener offline on ${path}; will auto-reconnect.`);
+        return;
+      }
       try {
         handleFirestoreError(error, OperationType.LIST, path);
       } catch (wrapped) {
@@ -396,71 +452,89 @@ export async function syncTaskRecordToFirestore(
   const safeTaskId = sanitizeDocId(task.id);
   const safeProjectId = sanitizeDocId(task.projectId);
   const path = `users/${safeUid}/taskRecords/${safeTaskId}`;
-  const ref = doc(db, 'users', safeUid, 'taskRecords', safeTaskId);
 
-  let snap;
-  try {
-    snap = await getDoc(ref);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
+  return withDocLock(path, async () => {
+    const ref = doc(db, 'users', safeUid, 'taskRecords', safeTaskId);
 
-  const priority = sanitizePriority(task.priority);
-  const status = sanitizeStatus(task.status);
-  const actualCostUsd = clampNumber(task.actualCostUsd ?? 0, 0, 100000, 0);
-  const modelName = clampString(task.modelName, 120, 'local');
+    let snap;
+    try {
+      snap = await getDoc(ref);
+    } catch (error) {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during get on ${path}; skipping task sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.GET, path);
+    }
 
-  if (snap.exists()) {
-    const existingData = snap.data();
-    const existingStatus = sanitizeStatus(existingData.status);
+    const priority = sanitizePriority(task.priority);
+    const status = sanitizeStatus(task.status);
+    const actualCostUsd = clampNumber(task.actualCostUsd ?? 0, 0, 100000, 0);
+    const modelName = clampString(task.modelName, 120, 'local');
 
-    // Respect Terminal State Locking in firestore.rules
-    if (TERMINAL_STATUSES.has(existingStatus)) {
-      if (existingData.priority !== priority) {
-        try {
-          await updateDoc(ref, {
-            priority,
-            updatedAt: serverTimestamp(),
-          });
-        } catch (error) {
-          handleFirestoreError(error, OperationType.UPDATE, path);
+    if (snap.exists()) {
+      const existingData = snap.data();
+      const existingStatus = sanitizeStatus(existingData.status);
+
+      if (TERMINAL_STATUSES.has(existingStatus)) {
+        if (existingData.priority !== priority) {
+          try {
+            await updateDoc(ref, {
+              priority,
+              updatedAt: serverTimestamp(),
+            });
+          } catch (error) {
+            if (isFirestoreOfflineError(error)) {
+              console.warn(`Firestore offline during update on ${path}; skipping task sync.`);
+              return;
+            }
+            handleFirestoreError(error, OperationType.UPDATE, path);
+          }
         }
+        return;
+      }
+
+      try {
+        await updateDoc(ref, {
+          status,
+          priority,
+          actualCostUsd,
+          modelName,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        if (isFirestoreOfflineError(error)) {
+          console.warn(`Firestore offline during update on ${path}; skipping task sync.`);
+          return;
+        }
+        handleFirestoreError(error, OperationType.UPDATE, path);
       }
       return;
     }
 
     try {
-      await updateDoc(ref, {
-        status,
+      await setDoc(ref, {
+        ownerId: safeUid,
+        projectId: safeProjectId,
+        projectName: clampString(projectName, 120, 'workspace'),
+        title: clampString(task.title, 200, 'Engineering Task'),
+        description: clampString(task.description, 4000, ''),
         priority,
-        actualCostUsd,
+        status,
+        executionMode: task.executionMode === 'direct' ? 'direct' : 'approval',
         modelName,
+        actualCostUsd,
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during create on ${path}; skipping task sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
-    return;
-  }
-
-  try {
-    await setDoc(ref, {
-      ownerId: safeUid,
-      projectId: safeProjectId,
-      projectName: clampString(projectName, 120, 'workspace'),
-      title: clampString(task.title, 200, 'Engineering Task'),
-      description: clampString(task.description, 4000, ''),
-      priority,
-      status,
-      executionMode: task.executionMode === 'direct' ? 'direct' : 'approval',
-      modelName,
-      actualCostUsd,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  });
 }
 
 export async function updateTaskPriorityInFirestore(
@@ -477,6 +551,10 @@ export async function updateTaskPriorityInFirestore(
   try {
     snap = await getDoc(ref);
   } catch (error) {
+    if (isFirestoreOfflineError(error)) {
+      console.warn(`Firestore offline during get on ${path}; skipping priority update.`);
+      return;
+    }
     handleFirestoreError(error, OperationType.GET, path);
   }
   if (!snap.exists()) return;
@@ -487,6 +565,10 @@ export async function updateTaskPriorityInFirestore(
       updatedAt: serverTimestamp(),
     });
   } catch (error) {
+    if (isFirestoreOfflineError(error)) {
+      console.warn(`Firestore offline during update on ${path}; skipping priority update.`);
+      return;
+    }
     handleFirestoreError(error, OperationType.UPDATE, path);
   }
 }
@@ -521,6 +603,10 @@ export function subscribeUserTaskRecords(
       onData(list);
     },
     (error) => {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore listener offline on ${path}; will auto-reconnect.`);
+        return;
+      }
       try {
         handleFirestoreError(error, OperationType.LIST, path);
       } catch (wrapped) {
@@ -537,47 +623,62 @@ export async function syncProjectSummaryToFirestore(
   const safeUid = sanitizeDocId(uid);
   const safeProjectId = sanitizeDocId(project.id);
   const path = `users/${safeUid}/savedProjects/${safeProjectId}`;
-  const ref = doc(db, 'users', safeUid, 'savedProjects', safeProjectId);
 
-  let snap;
-  try {
-    snap = await getDoc(ref);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.GET, path);
-  }
+  return withDocLock(path, async () => {
+    const ref = doc(db, 'users', safeUid, 'savedProjects', safeProjectId);
 
-  const fields = {
-    name: clampString(project.name, 120, 'workspace'),
-    description: clampString(project.description, 500, ''),
-    localPath: clampString(project.localPath, 260, 'C:\\Workspaces\\repo'),
-    framework: clampString(project.framework, 80, 'Node.js'),
-    primaryLanguage: clampString(project.primaryLanguage, 40, 'TypeScript'),
-    fileCount: clampNumber(project.files.length, 0, 100000, 0),
-    symbolCount: clampNumber(project.symbols.length, 0, 1000000, 0),
-  };
-
-  if (snap.exists()) {
+    let snap;
     try {
-      await updateDoc(ref, {
+      snap = await getDoc(ref);
+    } catch (error) {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during get on ${path}; skipping project sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.GET, path);
+    }
+
+    const fields = {
+      name: clampString(project.name, 120, 'workspace'),
+      description: clampString(project.description, 500, ''),
+      localPath: clampString(project.localPath, 260, 'C:\\Workspaces\\repo'),
+      framework: clampString(project.framework, 80, 'Node.js'),
+      primaryLanguage: clampString(project.primaryLanguage, 40, 'TypeScript'),
+      fileCount: clampNumber(project.files.length, 0, 100000, 0),
+      symbolCount: clampNumber(project.symbols.length, 0, 1000000, 0),
+    };
+
+    if (snap.exists()) {
+      try {
+        await updateDoc(ref, {
+          ...fields,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        if (isFirestoreOfflineError(error)) {
+          console.warn(`Firestore offline during update on ${path}; skipping project sync.`);
+          return;
+        }
+        handleFirestoreError(error, OperationType.UPDATE, path);
+      }
+      return;
+    }
+
+    try {
+      await setDoc(ref, {
+        ownerId: safeUid,
         ...fields,
+        createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, path);
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore offline during create on ${path}; skipping project sync.`);
+        return;
+      }
+      handleFirestoreError(error, OperationType.CREATE, path);
     }
-    return;
-  }
-
-  try {
-    await setDoc(ref, {
-      ownerId: safeUid,
-      ...fields,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, path);
-  }
+  });
 }
 
 export function subscribeUserProjects(
@@ -608,6 +709,10 @@ export function subscribeUserProjects(
       onData(list);
     },
     (error) => {
+      if (isFirestoreOfflineError(error)) {
+        console.warn(`Firestore listener offline on ${path}; will auto-reconnect.`);
+        return;
+      }
       try {
         handleFirestoreError(error, OperationType.LIST, path);
       } catch (wrapped) {
