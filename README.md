@@ -87,3 +87,45 @@ flowchart TB
     ORCH --> BRAIN
     ORCH --> SAND
     HOST --> SEC
+
+
+.
+├── .github/
+│   └── workflows/
+│       └── build-windows-exe.yml   # Automated Windows Electron CI/CD build
+├── desktop/                        # Desktop wrapper scripts (main.cjs, preload.cjs)
+├── electron/
+│   ├── assets/                     # Windows icon.ico & icon.png
+│   ├── main.cjs                    # Electron main process
+│   └── preload.cjs                 # Electron preload bridge
+├── public/
+│   ├── assets/                     # Static assets & demo GIFs
+│   ├── apple-touch-icon.png        # iOS touch icon
+│   ├── icon.png                    # App icon
+│   ├── pwa-192x192.png             # PWA icon (192x192)
+│   ├── pwa-512x512.png             # PWA icon (512x512)
+│   └── pwa-maskable-512x512.png    # Maskable PWA icon
+├── scripts/
+│   ├── build-win-exe.ps1           # PowerShell Windows .exe build script
+│   └── ensure-win-icon.mjs         # Windows .ico generator & verifier
+├── server/
+│   ├── agentOrchestrator.ts        # Multi-step AI agent orchestrator
+│   ├── extensionHost.ts            # Extension/plugin runtime host
+│   ├── modelGateway.ts             # Unified LLM model gateway
+│   ├── policyEngine.ts             # Policy & governance engine
+│   ├── repoBrain.ts                # Semantic repository context engine
+│   ├── sampleRepo.ts               # Built-in sample repository
+│   ├── sandboxRunner.ts            # Isolated sandbox runner
+│   └── securityEngine.ts           # Automated security analyzer
+├── src/
+│   ├── assets/images/              # Studio branding & visual assets
+│   ├── components/                 # All IDE views, panels, modals, indicators
+│   ├── hooks/                      # useOnlineStatus.ts, usePWAInstall.ts
+│   ├── services/                   # api.ts, firestoreSync.ts, offlineStore.ts
+│   ├── types/                      # devmind.ts, desktop.d.ts
+│   ├── App.tsx                     # Root application shell
+│   ├── firebase.ts                 # Firebase initialization
+│   ├── index.css                   # Global styles, themes & UI animations
+│   └── main.tsx                    # React entry point
+├── .env.example                    # Environment variable template
+├── build-windows-exe.bat
