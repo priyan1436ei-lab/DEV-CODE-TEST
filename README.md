@@ -1,5 +1,3 @@
-I’ll inspect the repository structure and main files, then create a clear README that presents the project details prominently.I’m inspecting the README and core source files to turn this repository into an accurate, polished project showcase.I couldn’t find a `README.md`, so the repository currently has no dedicated README. I’m also inspecting the frontend structure and metadata to prepare an accurate replacement.I found that the repository is currently **missing a README.md**. I’ll prepare a polished README and also verify the exact setup/build steps before writing it.# DevMind Studio
-
 **DevMind AI** is a Windows-focused desktop software engineering workbench with a VS Code-style interface. It combines repository editing, AI assistance, extensions, debugging, security analysis, and autonomous coding workflows.
 
 **Repository:** [priyan1436ei-lab/DEV-CODE-TEST](https://github.com/priyan1436ei-lab/DEV-CODE-TEST)
