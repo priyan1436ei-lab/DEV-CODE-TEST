@@ -25,22 +25,23 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({
   onOpenFileAtLine,
   onRemediateWithAgent,
 }) => {
+  const safeFindings = Array.isArray(findings) ? findings : [];
   const [filter, setFilter] = useState<'all' | Severity>('all');
   const [scanning, setScanning] = useState(false);
 
   const filtered = useMemo(
-    () => (filter === 'all' ? findings : findings.filter((f) => f.severity === filter)),
-    [findings, filter]
+    () => (filter === 'all' ? safeFindings : safeFindings.filter((f) => f.severity === filter)),
+    [safeFindings, filter]
   );
 
   const counts = useMemo(() => {
     return {
-      critical: findings.filter((f) => f.severity === 'critical').length,
-      high: findings.filter((f) => f.severity === 'high').length,
-      medium: findings.filter((f) => f.severity === 'medium').length,
-      low: findings.filter((f) => f.severity === 'low').length,
+      critical: safeFindings.filter((f) => f.severity === 'critical').length,
+      high: safeFindings.filter((f) => f.severity === 'high').length,
+      medium: safeFindings.filter((f) => f.severity === 'medium').length,
+      low: safeFindings.filter((f) => f.severity === 'low').length,
     };
-  }, [findings]);
+  }, [safeFindings]);
 
   const handleScan = async () => {
     setScanning(true);
@@ -52,7 +53,7 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({
   };
 
   const handleRemediateAll = () => {
-    const summary = findings
+    const summary = safeFindings
       .filter((f) => f.ruleId !== 'DEVMIND-INJECT-007')
       .map((f) => `- ${f.filePath}:${f.line} [${f.cwe}] ${f.title}: ${f.remediation}`)
       .join('\n');
@@ -62,14 +63,14 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({
   };
 
   return (
-    <div className="h-full overflow-auto bg-[#0D0F14] p-6 space-y-6">
+    <div className="h-full overflow-auto bg-[#090B10] p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#262B3A] pb-4">
         <div>
           <h1 className="text-[20px] font-semibold text-[#E6E9F2] tracking-tight">
             Security Intelligence Center
           </h1>
           <p className="text-[13px] text-[#A3AABF] mt-1 tabular-nums">
-            Static AST & pattern rules · Secret scanning & prompt-injection isolation · {findings.length} open finding(s)
+            Static AST & pattern rules · Secret scanning & prompt-injection isolation · {safeFindings.length} open finding(s)
           </p>
         </div>
 
@@ -83,7 +84,7 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({
             <span>{scanning ? 'Scanning...' : 'Re-scan Repo'}</span>
           </button>
 
-          {findings.length > 0 && (
+          {safeFindings.length > 0 && (
             <button
               onClick={handleRemediateAll}
               className="flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] text-[#0D0F14] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
@@ -108,7 +109,7 @@ export const SecurityCenterView: React.FC<SecurityCenterViewProps> = ({
                   : 'text-[#A3AABF] hover:text-[#E6E9F2]'
               }`}
             >
-              {sev === 'all' ? `All (${findings.length})` : `${sev} (${counts[sev]})`}
+              {sev === 'all' ? `All (${safeFindings.length})` : `${sev} (${counts[sev]})`}
             </button>
           ))}
         </div>

@@ -1,0 +1,34 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install && npm install -D electron electron-builder
+
+      - name: Build web assets
+        run: npm run build
+
+      - name: Build Windows Installer & Portable EXE
+        run: npx electron-builder --win --x64 --config electron-builder.yml
+
+      - name: Upload Windows EXE artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmind-ai-windows-exe
+          path: release/*.exe

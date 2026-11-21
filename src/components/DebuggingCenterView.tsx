@@ -51,8 +51,10 @@ export const DebuggingCenterView: React.FC<DebuggingCenterViewProps> = ({
     }
   };
 
+  const safeAnalyses = Array.isArray(analyses) ? analyses : [];
+
   return (
-    <div className="h-full overflow-auto bg-[#0D0F14] p-6 space-y-6">
+    <div className="h-full overflow-auto bg-[#090B10] p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#262B3A] pb-4">
         <div>
           <h1 className="text-[20px] font-semibold text-[#E6E9F2] tracking-tight">
@@ -103,12 +105,12 @@ export const DebuggingCenterView: React.FC<DebuggingCenterViewProps> = ({
 
       {/* Root-Cause Analyses */}
       <div className="space-y-4">
-        {analyses.length === 0 ? (
+        {safeAnalyses.length === 0 ? (
           <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-8 text-center text-[#6B728A] text-[13px]">
             No debug analyses recorded for this project yet. Click <span className="text-[#E6E9F2]">Analyze Root Cause</span> above to diagnose the active error.
           </div>
         ) : (
-          analyses.map((item) => (
+          safeAnalyses.map((item) => (
             <article
               key={item.id}
               className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-4"

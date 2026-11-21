@@ -2,22 +2,177 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'node:path';
 import { createServer as createViteServer } from 'vite';
-import { store } from './server/agentOrchestrator.ts';
-import { GATEWAY_PROVIDERS } from './server/modelGateway.ts';
+import { store, type RealtimeSyncEvent } from './server/agentOrchestrator.ts';
+import { LLM_PROVIDER_PRESETS } from './server/modelGateway.ts';
 import { hybridSearchRepository } from './server/repoBrain.ts';
+import type { LlmProviderId, TaskPriority, UserLlmConfig } from './src/types/devmind.ts';
+
+function extractBearerToken(req: express.Request): string | null {
+  const header = req.headers.authorization;
+  if (!header) return null;
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}
+
+function getSessionLlmConfig(req: express.Request): UserLlmConfig {
+  const token = extractBearerToken(req);
+  const session = store.getSessionByToken(token);
+  if (!session) {
+    return {
+      provider: 'openai',
+      baseUrl: '',
+      model: '',
+      apiKey: '',
+      configured: false,
+    };
+  }
+  return session.llm;
+}
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT || 3000);
 
   app.use(express.json({ limit: '10mb' }));
 
-  // Health endpoint
+  // Health & Provider Presets
   app.get('/api/v1/health', (_req, res) => {
-    res.json({ ok: true, service: 'devmind-ai-gateway', timestamp: new Date().toISOString() });
+    res.json({ ok: true, service: 'devmind-ai-byok-gateway', timestamp: new Date().toISOString() });
   });
 
-  // Projects & Repository Brain (Section 12)
+  app.get('/api/v1/providers', (_req, res) => {
+    res.json({ presets: LLM_PROVIDER_PRESETS });
+  });
+
+  // Real-Time Server-Sent Events Sync Stream
+  app.get('/api/v1/events', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const sendEvent = (evt: RealtimeSyncEvent) => {
+      res.write(`data: ${JSON.stringify(evt)}\n\n`);
+    };
+
+    res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`);
+    store.events.on('sync', sendEvent);
+
+    const keepAlive = setInterval(() => {
+      res.write(`: heartbeat\n\n`);
+    }, 25000);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      store.events.off('sync', sendEvent);
+    });
+  });
+
+  // Auth & User-Provided BYOK LLM Session Management
+  app.post('/api/v1/auth/test-llm', async (req, res) => {
+    try {
+      const { provider, baseUrl, model, apiKey } = req.body ?? {};
+      const token = extractBearerToken(req);
+      const activeSession = store.getSessionByToken(token);
+      const resolvedKey =
+        String(apiKey || '').trim() ||
+        (activeSession && activeSession.llm.apiKey ? activeSession.llm.apiKey : '');
+      const result = await store.gateway.testConnection({
+        provider: (provider || 'openai') as LlmProviderId,
+        baseUrl: String(baseUrl || ''),
+        model: String(model || ''),
+        apiKey: resolvedKey,
+        configured: true,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(400).json({
+        ok: false,
+        error: err instanceof Error ? err.message : 'LLM connection test failed',
+      });
+    }
+  });
+
+  app.post('/api/v1/auth/login', (req, res) => {
+    try {
+      const { displayName, email, provider, baseUrl, model, apiKey, sandboxOnly } = req.body ?? {};
+      const preset =
+        LLM_PROVIDER_PRESETS.find((p) => p.id === provider) ?? LLM_PROVIDER_PRESETS[0];
+
+      const configured = !sandboxOnly && Boolean(String(baseUrl || preset.defaultBaseUrl).trim() && String(model || preset.defaultModel).trim());
+      if (configured && preset.requiresKey && !String(apiKey || '').trim()) {
+        return res.status(400).json({
+          error: `Please enter your ${preset.name} API key, or choose "Sandbox Mode".`,
+        });
+      }
+
+      const created = store.createSession({
+        displayName: String(displayName || 'Developer'),
+        email: String(email || 'developer@workspace.local'),
+        llm: {
+          provider: preset.id,
+          baseUrl: String(baseUrl || preset.defaultBaseUrl),
+          model: String(model || preset.defaultModel),
+          apiKey: String(apiKey || ''),
+          configured,
+        },
+      });
+      res.status(201).json(created);
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Login failed' });
+    }
+  });
+
+  app.get('/api/v1/auth/session', (req, res) => {
+    const token = extractBearerToken(req);
+    const rec = store.getSessionByToken(token);
+    if (!rec) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    res.json({ session: store.toPublicSession(rec) });
+  });
+
+  app.put('/api/v1/auth/llm-config', (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token) return res.status(401).json({ error: 'Not authenticated' });
+      const { provider, baseUrl, model, apiKey } = req.body ?? {};
+      const session = store.updateSessionLlm(token, {
+        provider: (provider || 'openai') as LlmProviderId,
+        baseUrl: String(baseUrl || ''),
+        model: String(model || ''),
+        apiKey: String(apiKey || ''),
+        configured: true,
+      });
+      res.json({ session });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update LLM configuration' });
+    }
+  });
+
+  app.post('/api/v1/auth/logout', (req, res) => {
+    const token = extractBearerToken(req);
+    if (token) store.deleteSession(token);
+    res.json({ ok: true });
+  });
+
+  // Require valid authenticated session for all workspace & AI API routes below
+  const requireSession: express.RequestHandler = (req, res, next) => {
+    const token = extractBearerToken(req);
+    if (!store.getSessionByToken(token)) {
+      return res.status(401).json({ error: 'Session required. Please sign in to access the workspace.' });
+    }
+    next();
+  };
+
+  app.use('/api/v1/projects', requireSession);
+  app.use('/api/v1/agent', requireSession);
+  app.use('/api/v1/approvals', requireSession);
+  app.use('/api/v1/policies', requireSession);
+  app.use('/api/v1/billing', requireSession);
+  app.use('/api/v1/audit', requireSession);
+
+  // Projects & Repository Brain
   app.get('/api/v1/projects', (_req, res) => {
     res.json({ projects: store.listProjects() });
   });
@@ -57,6 +212,28 @@ async function startServer() {
     }
   });
 
+  app.delete('/api/v1/projects/:id/files', (req, res) => {
+    try {
+      const filePath = String(req.body?.path || req.query.path || '');
+      if (!filePath) {
+        return res.status(400).json({ error: 'File path is required.' });
+      }
+      const project = store.deleteFile(req.params.id, filePath);
+      res.json({ project });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to delete file' });
+    }
+  });
+
+  app.delete('/api/v1/projects/:id', (req, res) => {
+    try {
+      store.deleteProject(req.params.id);
+      res.json({ ok: true, projects: store.listProjects() });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to delete project' });
+    }
+  });
+
   app.get('/api/v1/projects/:id/architecture', (req, res) => {
     try {
       const project = store.getProject(req.params.id);
@@ -77,7 +254,7 @@ async function startServer() {
     }
   });
 
-  // Security Center (M6)
+  // Security Center
   app.get('/api/v1/projects/:id/security', (req, res) => {
     try {
       const findings = store.getSecurityFindings(req.params.id);
@@ -87,7 +264,7 @@ async function startServer() {
     }
   });
 
-  // Isolated Sandbox Test Runner (M5 & Section 13)
+  // Isolated Sandbox Test Runner with Real V8 Coverage
   app.get('/api/v1/projects/:id/tests', (req, res) => {
     try {
       store.getProject(req.params.id);
@@ -106,7 +283,7 @@ async function startServer() {
     }
   });
 
-  // Repository-Aware AI Chat (RAG)
+  // Repository-Aware AI Chat (uses active session BYOK LLM)
   app.get('/api/v1/projects/:id/chat', (req, res) => {
     try {
       store.getProject(req.params.id);
@@ -122,14 +299,15 @@ async function startServer() {
       if (!question) {
         return res.status(400).json({ error: 'Message is required.' });
       }
-      const reply = await store.repoChat(req.params.id, question);
+      const llmConfig = getSessionLlmConfig(req);
+      const reply = await store.repoChat(req.params.id, question, llmConfig);
       res.json({ reply, messages: store.chatHistories.get(req.params.id) ?? [] });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'AI chat failed' });
     }
   });
 
-  // Debugging Center (M4)
+  // Debugging Center (uses active session BYOK LLM)
   app.get('/api/v1/projects/:id/debug', (req, res) => {
     try {
       store.getProject(req.params.id);
@@ -145,45 +323,71 @@ async function startServer() {
       if (!errorLog) {
         return res.status(400).json({ error: 'Error log or stack trace is required.' });
       }
-      const analysis = await store.analyzeDebugError(req.params.id, errorLog);
+      const llmConfig = getSessionLlmConfig(req);
+      const analysis = await store.analyzeDebugError(req.params.id, errorLog, llmConfig);
       res.json({ analysis });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Debug analysis failed' });
     }
   });
 
-  // Autonomous Agent Tasks & Approvals (M3 & Section 12)
+  // Autonomous Agent Tasks & Approvals (uses active session BYOK LLM)
   app.get('/api/v1/agent/tasks', (req, res) => {
     const projectId = req.query.projectId ? String(req.query.projectId) : undefined;
+    const priorityFilter = req.query.priority ? String(req.query.priority) : undefined;
     const all = Array.from(store.tasks.values()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
-    const filtered = projectId ? all.filter((t) => t.projectId === projectId) : all;
+    let filtered = projectId ? all.filter((t) => t.projectId === projectId) : all;
+    if (priorityFilter === 'high' || priorityFilter === 'medium' || priorityFilter === 'low') {
+      filtered = filtered.filter((t) => (t.priority ?? 'medium') === priorityFilter);
+    }
     res.json({ tasks: filtered });
   });
 
   app.post('/api/v1/agent/tasks', async (req, res) => {
     try {
-      const { projectId, title, description, executionMode } = req.body ?? {};
+      const { projectId, title, description, executionMode, priority } = req.body ?? {};
       if (!projectId || !description) {
         return res.status(400).json({ error: 'projectId and description are required.' });
       }
-      const task = await store.startAutonomousTask({
-        projectId,
-        title: title || description.slice(0, 60),
-        description,
-        executionMode: executionMode === 'strict_sandbox' ? 'strict_sandbox' : 'approval',
-      });
+      const validPriority: TaskPriority | undefined =
+        priority === 'high' || priority === 'medium' || priority === 'low' ? priority : undefined;
+      const llmConfig = getSessionLlmConfig(req);
+      const task = await store.startAutonomousTask(
+        {
+          projectId,
+          title: title || description.slice(0, 60),
+          description,
+          executionMode: executionMode === 'strict_sandbox' ? 'strict_sandbox' : 'approval',
+          priority: validPriority,
+        },
+        llmConfig
+      );
       res.status(201).json({ task, project: store.getProject(projectId) });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Agent task failed' });
     }
   });
 
+  app.patch('/api/v1/agent/tasks/:id/priority', (req, res) => {
+    try {
+      const priority = req.body?.priority;
+      if (priority !== 'high' && priority !== 'medium' && priority !== 'low') {
+        return res.status(400).json({ error: 'Priority must be high, medium, or low.' });
+      }
+      const task = store.updateTaskPriority(req.params.id, priority);
+      res.json({ task });
+    } catch (err) {
+      res.status(404).json({ error: err instanceof Error ? err.message : 'Failed to update task priority' });
+    }
+  });
+
   app.post('/api/v1/approvals/:id/decision', async (req, res) => {
     try {
       const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
-      const task = await store.decideApproval(req.params.id, decision);
+      const llmConfig = getSessionLlmConfig(req);
+      const task = await store.decideApproval(req.params.id, decision, llmConfig);
       const project = store.getProject(task.projectId);
       const securityFindings = store.getSecurityFindings(task.projectId);
       res.json({ task, project, securityFindings });
@@ -214,7 +418,7 @@ async function startServer() {
 
   // Policy Engine, Billing/Usage & Immutable Audit Logs
   app.get('/api/v1/policies', (_req, res) => {
-    res.json({ policies: store.policies, providers: GATEWAY_PROVIDERS });
+    res.json({ policies: store.policies, presets: LLM_PROVIDER_PRESETS });
   });
 
   app.put('/api/v1/policies/:actionType', (req, res) => {
@@ -235,22 +439,29 @@ async function startServer() {
       resourceId: rule.actionType,
       summary: `Updated permission policy "${rule.label}" -> ${level}.`,
     });
+    store.emitSync('policy_updated');
     res.json({ policies: store.policies });
   });
 
   app.get('/api/v1/billing/usage', (_req, res) => {
-    res.json({ usage: store.gateway.ledger, providers: GATEWAY_PROVIDERS });
+    res.json({ usage: store.gateway.ledger, presets: LLM_PROVIDER_PRESETS });
   });
 
   app.put('/api/v1/billing/budget', (req, res) => {
     const monthlyBudgetUsd = Number(req.body?.monthlyBudgetUsd ?? 25);
     const monthlyTokenLimit = Number(req.body?.monthlyTokenLimit ?? 2_000_000);
     store.gateway.updateBudget(monthlyBudgetUsd, monthlyTokenLimit);
+    store.emitSync('usage_updated');
     res.json({ usage: store.gateway.ledger });
   });
 
   app.get('/api/v1/audit', (_req, res) => {
     res.json({ auditLogs: store.auditLogs });
+  });
+
+  // Explicit 404 JSON guard so /api/* never falls through to Vite HTML!
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ error: 'API endpoint not found.' });
   });
 
   // Mount Vite middleware in dev, or serve built dist/ in production

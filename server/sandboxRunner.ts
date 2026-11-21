@@ -342,7 +342,7 @@ export async function runSandboxedTests(
       };
     }
 
-    // Resolve local tsx binary so sandbox runs with stripped host secrets (no GEMINI_API_KEY!)
+    // Resolve local tsx binary so sandbox runs with stripped host secrets (zero API keys passed to child env)
     const tsxBin = path.resolve(process.cwd(), 'node_modules', '.bin', 'tsx');
     const cleanEnv: NodeJS.ProcessEnv = {
       PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',

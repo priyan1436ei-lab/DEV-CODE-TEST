@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ArrowUpRight,
   CheckCircle2,
@@ -12,9 +12,31 @@ import type {
   Project,
   ScreenId,
   SecurityFinding,
+  TaskPriority,
   TestRun,
   UsageLedger,
 } from '../types/devmind';
+
+const PRIORITY_STYLE: Record<TaskPriority, { label: string; color: string; bg: string; border: string }> = {
+  high: {
+    label: 'High',
+    color: '#FF5468',
+    bg: 'rgba(255, 84, 104, 0.1)',
+    border: 'rgba(255, 84, 104, 0.35)',
+  },
+  medium: {
+    label: 'Medium',
+    color: '#F5B642',
+    bg: 'rgba(245, 182, 66, 0.1)',
+    border: 'rgba(245, 182, 66, 0.35)',
+  },
+  low: {
+    label: 'Low',
+    color: '#4DB8FF',
+    bg: 'rgba(77, 184, 255, 0.1)',
+    border: 'rgba(77, 184, 255, 0.35)',
+  },
+};
 
 interface DashboardViewProps {
   project: Project;
@@ -47,16 +69,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onSelectTask,
   onOpenImportModal,
 }) => {
-  const latestRun = testRuns[0] ?? null;
-  const criticalCount = securityFindings.filter((f) => f.severity === 'critical').length;
-  const highCount = securityFindings.filter((f) => f.severity === 'high').length;
-  const completedTasks = tasks.filter((t) => t.status === 'completed').length;
+  const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
+
+  const safeProjects = Array.isArray(projects) ? projects : [];
+  const safeTasks = Array.isArray(tasks) ? tasks : [];
+  const safeFindings = Array.isArray(securityFindings) ? securityFindings : [];
+  const safeRuns = Array.isArray(testRuns) ? testRuns : [];
+
+  const filteredTasks =
+    priorityFilter === 'all'
+      ? safeTasks
+      : safeTasks.filter((t) => (t.priority ?? 'medium') === priorityFilter);
+
+  const latestRun = safeRuns[0] ?? null;
+  const criticalCount = safeFindings.filter((f) => f.severity === 'critical').length;
+  const highCount = safeFindings.filter((f) => f.severity === 'high').length;
+  const completedTasks = safeTasks.filter((t) => t.status === 'completed').length;
   const spendPct = usage
     ? Math.min(100, Math.round((usage.spentUsd / Math.max(0.01, usage.monthlyBudgetUsd)) * 100))
     : 0;
 
   return (
-    <div className="h-full overflow-auto bg-[#0D0F14] p-6 space-y-6">
+    <div className="h-full overflow-auto bg-[#090B10] p-6 space-y-6">
       {/* Header Row */}
       <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#262B3A] pb-5">
         <div className="space-y-1 max-w-2xl">
@@ -125,8 +159,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-1">
           <div className="text-[12px] text-[#A3AABF]">Open Security Findings</div>
           <div className="text-[22px] font-semibold font-mono tabular-nums">
-            <span className={securityFindings.length > 0 ? 'text-[#FF7A45]' : 'text-[#3DD68C]'}>
-              {securityFindings.length}
+            <span className={safeFindings.length > 0 ? 'text-[#FF7A45]' : 'text-[#3DD68C]'}>
+              {safeFindings.length}
             </span>
           </div>
           <div className="text-[12px] text-[#6B728A] tabular-nums">
@@ -198,43 +232,83 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
           {/* Recent Agent Tasks */}
           <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="text-[15px] font-semibold text-[#E6E9F2]">
                 Recent Autonomous Tasks
               </h2>
-              <button
-                onClick={() => onNavigate('history')}
-                className="flex items-center gap-1 text-[12px] text-[#8793FF] hover:underline"
-              >
-                <span>View all ({tasks.length})</span>
-                <ArrowUpRight className="w-3.5 h-3.5" />
-              </button>
+              <div className="flex items-center gap-3">
+                <select
+                  aria-label="Filter recent tasks by priority"
+                  value={priorityFilter}
+                  onChange={(e) => setPriorityFilter(e.target.value as 'all' | TaskPriority)}
+                  className="bg-[#0F1117] border border-[#262B3A] focus:border-[#5B7CFF] text-[#E6E9F2] text-[11px] rounded-[5px] px-2 py-1 outline-none"
+                >
+                  <option value="all">All Priorities</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <button
+                  onClick={() => onNavigate('history')}
+                  className="flex items-center gap-1 text-[12px] text-[#8793FF] hover:underline whitespace-nowrap"
+                >
+                  <span>View all ({filteredTasks.length})</span>
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
 
-            {tasks.length === 0 ? (
+            {safeTasks.length === 0 ? (
               <p className="text-[12px] text-[#6B728A] py-3">
                 No autonomous tasks executed yet. Launch a task from the right-hand AI panel or click{' '}
                 <span className="text-[#E6E9F2]">Run Autonomous Security Fix</span> above.
               </p>
+            ) : filteredTasks.length === 0 ? (
+              <p className="text-[12px] text-[#6B728A] py-3">
+                No <span className="text-[#E6E9F2] capitalize">{priorityFilter}</span> priority tasks in this project.
+              </p>
             ) : (
               <div className="divide-y divide-[#262B3A] border-t border-[#262B3A]">
-                {tasks.slice(0, 5).map((t) => (
-                  <button
-                    key={t.id}
-                    onClick={() => onSelectTask(t)}
-                    className="w-full flex items-center justify-between gap-4 py-3 text-left hover:bg-[#1C2030]/40 px-2 -mx-2 rounded-[6px] transition-colors duration-120"
-                  >
-                    <div className="min-w-0">
-                      <div className="text-[13px] font-medium text-[#E6E9F2] truncate">{t.title}</div>
-                      <div className="text-[11px] text-[#6B728A] font-mono tabular-nums mt-0.5">
-                        {t.changes.length} file patch(es) · {(t.promptTokens + t.completionTokens).toLocaleString()} tokens · ${t.actualCostUsd.toFixed(5)}
+                {filteredTasks.slice(0, 5).map((t) => {
+                  const p: TaskPriority =
+                    t.priority === 'high' || t.priority === 'medium' || t.priority === 'low'
+                      ? t.priority
+                      : 'medium';
+                  const pStyle = PRIORITY_STYLE[p];
+                  return (
+                    <button
+                      key={t.id}
+                      onClick={() => onSelectTask(t)}
+                      className="w-full flex items-center justify-between gap-4 py-3 text-left hover:bg-[#1C2030]/40 px-2 -mx-2 rounded-[6px] transition-colors duration-120"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] font-mono text-[10px] font-semibold uppercase border shrink-0"
+                            style={{
+                              color: pStyle.color,
+                              backgroundColor: pStyle.bg,
+                              borderColor: pStyle.border,
+                            }}
+                          >
+                            <span
+                              className="w-1.5 h-1.5 rounded-full"
+                              style={{ backgroundColor: pStyle.color }}
+                            />
+                            {pStyle.label}
+                          </span>
+                          <span className="text-[13px] font-medium text-[#E6E9F2] truncate">{t.title}</span>
+                        </div>
+                        <div className="text-[11px] text-[#6B728A] font-mono tabular-nums mt-1">
+                          {t.changes.length} file patch(es) · {(t.promptTokens + t.completionTokens).toLocaleString()} tokens · ${t.actualCostUsd.toFixed(5)}
+                        </div>
                       </div>
-                    </div>
-                    <span className="font-mono text-[11px] text-[#A3AABF] shrink-0 uppercase">
-                      {t.status.replace('_', ' ')}
-                    </span>
-                  </button>
-                ))}
+                      <span className="font-mono text-[11px] text-[#A3AABF] shrink-0 uppercase">
+                        {t.status.replace('_', ' ')}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -246,10 +320,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-[15px] font-semibold text-[#E6E9F2]">Workspace Repositories</h2>
-              <span className="text-[12px] text-[#6B728A] tabular-nums">{projects.length} connected</span>
+              <span className="text-[12px] text-[#6B728A] tabular-nums">{safeProjects.length} connected</span>
             </div>
             <div className="divide-y divide-[#262B3A]">
-              {projects.map((p) => {
+              {safeProjects.map((p) => {
                 const isCurrent = p.id === project.id;
                 return (
                   <button
@@ -287,13 +361,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 Open Security Center
               </button>
             </div>
-            {securityFindings.length === 0 ? (
+            {safeFindings.length === 0 ? (
               <p className="text-[12px] text-[#3DD68C]">
                 Zero open security findings detected in {project.name}.
               </p>
             ) : (
               <div className="space-y-2">
-                {securityFindings.slice(0, 4).map((f) => (
+                {safeFindings.slice(0, 4).map((f) => (
                   <div key={f.id} className="flex items-start gap-2.5 text-[12px]">
                     <ShieldAlert
                       className="w-4 h-4 shrink-0 mt-0.5"

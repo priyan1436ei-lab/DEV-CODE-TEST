@@ -7,9 +7,12 @@ import {
   ChevronRight,
   Cpu,
   FileCode2,
+  FilePlus2,
   Folder,
   FolderPlus,
+  KeyRound,
   LayoutDashboard,
+  LogOut,
   PanelBottom,
   PanelLeft,
   PanelRight,
@@ -18,6 +21,7 @@ import {
   Search,
   Settings,
   Shield,
+  Trash2,
 } from 'lucide-react';
 import { AiWorkspacePanel } from './components/AiWorkspacePanel';
 import { BottomSandboxPanel } from './components/BottomSandboxPanel';
@@ -27,21 +31,30 @@ import { DashboardView } from './components/DashboardView';
 import { DebuggingCenterView } from './components/DebuggingCenterView';
 import { ExecutionHistoryView } from './components/ExecutionHistoryView';
 import { ImportRepoModal } from './components/ImportRepoModal';
+import { LoginGate } from './components/LoginGate';
 import { RepoBrainView } from './components/RepoBrainView';
 import { SecurityCenterView } from './components/SecurityCenterView';
 import { SettingsPolicyView } from './components/SettingsPolicyView';
-import { devmindApi, type ProviderInfo } from './services/api';
+import {
+  devmindApi,
+  getStoredSessionToken,
+  setStoredSessionToken,
+  type ProviderPreset,
+} from './services/api';
 import type {
   AgentTask,
   AuditLogEntry,
   ChatMessage,
   CodeChange,
   DebugAnalysis,
+  LlmProviderId,
   PermissionLevel,
   PermissionPolicyRule,
   Project,
+  PublicUserSession,
   ScreenId,
   SecurityFinding,
+  TaskPriority,
   TestRun,
   UsageLedger,
 } from './types/devmind';
@@ -53,7 +66,13 @@ interface ToastItem {
 }
 
 export default function App() {
-  // Core Data State
+  // Authentication & BYOK LLM Session
+  const [session, setSession] = useState<PublicUserSession | null>(null);
+  const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const [checkingAuth, setCheckingAuth] = useState(true);
+  const [sseConnected, setSseConnected] = useState(false);
+
+  // Core Workspace State
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
   const [tasks, setTasks] = useState<AgentTask[]>([]);
@@ -63,28 +82,30 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [debugAnalyses, setDebugAnalyses] = useState<DebugAnalysis[]>([]);
   const [policies, setPolicies] = useState<PermissionPolicyRule[]>([]);
-  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [usage, setUsage] = useState<UsageLedger | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
 
-  // Workspace Shell & 4-Panel Resizable State (Section 5)
-  const [activeScreen, setActiveScreen] = useState<ScreenId>('dashboard');
-  const [showLeftPanel, setShowLeftPanel] = useState(true);
+  // Obsidian Studio Modern 4-Panel Resizable Layout
+  const [activeScreen, setActiveScreen] = useState<ScreenId>('explorer');
+  const [showExplorerDrawer, setShowExplorerDrawer] = useState(true);
   const [showRightPanel, setShowRightPanel] = useState(true);
   const [showBottomPanel, setShowBottomPanel] = useState(true);
-  const [leftWidth, setLeftWidth] = useState(252);
-  const [rightWidth, setRightWidth] = useState(386);
-  const [bottomHeight, setBottomHeight] = useState(216);
+  const [leftWidth, setLeftWidth] = useState(236);
+  const [rightWidth, setRightWidth] = useState(372);
+  const [bottomHeight, setBottomHeight] = useState(215);
 
-  // Editor & Diff Tabs
+  // Editor Tabs & Inline New File Creator
   const [openTabs, setOpenTabs] = useState<string[]>([]);
   const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   const [activeDiffChange, setActiveDiffChange] = useState<CodeChange | null>(null);
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+  const [creatingFile, setCreatingFile] = useState(false);
+  const [newFilePath, setNewFilePath] = useState('src/newModule.ts');
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
 
   // Busy & Overlay State
-  const [loadingBoot, setLoadingBoot] = useState(true);
+  const [loadingWorkspace, setLoadingWorkspace] = useState(false);
   const [runningTests, setRunningTests] = useState(false);
   const [agentBusy, setAgentBusy] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
@@ -95,6 +116,11 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   const dragModeRef = useRef<'left' | 'right' | 'bottom' | null>(null);
+  const activeProjectIdRef = useRef<string>('');
+
+  useEffect(() => {
+    activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
 
   const pushToast = useCallback((message: string, tone: ToastItem['tone'] = 'info') => {
     const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -125,10 +151,10 @@ export default function App() {
       devmindApi.getUsage(),
       devmindApi.getAuditLogs(),
     ]);
-    setPolicies(polRes.policies);
-    setProviders(polRes.providers);
-    setUsage(useRes.usage);
-    setAuditLogs(audRes.auditLogs);
+    setPolicies(Array.isArray(polRes.policies) ? polRes.policies : []);
+    if (Array.isArray(polRes.presets)) setPresets(polRes.presets);
+    setUsage(useRes.usage ?? null);
+    setAuditLogs(Array.isArray(audRes.auditLogs) ? audRes.auditLogs : []);
   }, []);
 
   const loadProjectContext = useCallback(async (projectId: string) => {
@@ -139,44 +165,145 @@ export default function App() {
       devmindApi.getDebugAnalyses(projectId),
       devmindApi.listTasks(projectId),
     ]);
-    setSecurityFindings(secRes.findings);
-    setTestRuns(testRes.testRuns);
-    setChatMessages(chatRes.messages);
-    setDebugAnalyses(dbgRes.analyses);
-    setTasks(taskRes.tasks);
-    setActiveTaskId(taskRes.tasks[0]?.id ?? null);
+    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
+    setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
+    setChatMessages(Array.isArray(chatRes.messages) ? chatRes.messages : []);
+    setDebugAnalyses(Array.isArray(dbgRes.analyses) ? dbgRes.analyses : []);
+    const safeTasks = Array.isArray(taskRes.tasks) ? taskRes.tasks : [];
+    setTasks(safeTasks);
+    setActiveTaskId((prev) => (prev && safeTasks.some((t) => t.id === prev) ? prev : safeTasks[0]?.id ?? null));
   }, []);
 
-  // Initial Bootstrap
+  const bootstrapWorkspace = useCallback(async () => {
+    setLoadingWorkspace(true);
+    try {
+      const [{ projects: list }] = await Promise.all([
+        devmindApi.listProjects(),
+        refreshGlobalMeta(),
+      ]);
+      const safeList = Array.isArray(list) ? list : [];
+      setProjects(safeList);
+      if (safeList.length > 0) {
+        const first = safeList[0];
+        setActiveProjectId(first.id);
+        const initialFile =
+          first.files.find((f) => f.path.includes('tokenService'))?.path ?? first.files[0]?.path ?? null;
+        if (initialFile) {
+          setOpenTabs([initialFile]);
+          setActiveFilePath(initialFile);
+        }
+        await loadProjectContext(first.id);
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to load workspace', 'error');
+    } finally {
+      setLoadingWorkspace(false);
+    }
+  }, [loadProjectContext, pushToast, refreshGlobalMeta]);
+
+  // Step 1: Load Provider Presets & Restore Existing Session if Valid
   useEffect(() => {
     (async () => {
       try {
-        const [{ projects: list }] = await Promise.all([
-          devmindApi.listProjects(),
-          refreshGlobalMeta(),
-        ]);
-        setProjects(list);
-        if (list.length > 0) {
-          const first = list[0];
-          setActiveProjectId(first.id);
-          const initialFile =
-            first.files.find((f) => f.path.includes('tokenService'))?.path ?? first.files[0]?.path ?? null;
-          if (initialFile) {
-            setOpenTabs([initialFile]);
-            setActiveFilePath(initialFile);
+        const { presets: pList } = await devmindApi.getPresets();
+        setPresets(Array.isArray(pList) ? pList : []);
+        const token = getStoredSessionToken();
+        if (token) {
+          try {
+            const { session: restored } = await devmindApi.getSession();
+            setSession(restored);
+            await bootstrapWorkspace();
+          } catch {
+            setStoredSessionToken(null);
           }
-          await loadProjectContext(first.id);
         }
       } catch (err) {
-        pushToast(err instanceof Error ? err.message : 'Failed to initialize DevMind AI', 'error');
+        pushToast(err instanceof Error ? err.message : 'Server unreachable', 'error');
       } finally {
-        setLoadingBoot(false);
+        setCheckingAuth(false);
       }
     })();
-  }, [loadProjectContext, pushToast, refreshGlobalMeta]);
+  }, [bootstrapWorkspace, pushToast]);
 
-  // Global Keyboard Shortcuts (Section 5)
+  // Step 2: Real-Time SSE Synchronization Subscription (with Auto-Reconnect)
   useEffect(() => {
+    if (!session) return;
+    let closed = false;
+    let source: EventSource | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const connect = () => {
+      if (closed) return;
+      source = new EventSource('/api/v1/events');
+
+      source.onopen = () => setSseConnected(true);
+
+      source.onmessage = async (ev) => {
+        try {
+          const evt = JSON.parse(ev.data) as { type: string; projectId?: string };
+          if (evt.type === 'connected') {
+            setSseConnected(true);
+            return;
+          }
+          const currentId = activeProjectIdRef.current;
+
+          if (evt.type === 'project_updated') {
+            const { projects: latest } = await devmindApi.listProjects();
+            if (Array.isArray(latest)) {
+              setProjects(latest);
+              const targetId = currentId && latest.some((p) => p.id === currentId) ? currentId : latest[0]?.id;
+              if (targetId) {
+                setActiveProjectId(targetId);
+                const secRes = await devmindApi.getSecurityFindings(targetId);
+                setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
+              }
+            }
+          }
+
+          if (currentId && (!evt.projectId || evt.projectId === currentId)) {
+            if (evt.type === 'tests_updated') {
+              const res = await devmindApi.getTestRuns(currentId);
+              setTestRuns(Array.isArray(res.testRuns) ? res.testRuns : []);
+            } else if (evt.type === 'task_updated') {
+              const res = await devmindApi.listTasks(currentId);
+              setTasks(Array.isArray(res.tasks) ? res.tasks : []);
+            } else if (evt.type === 'chat_updated') {
+              const res = await devmindApi.getChatHistory(currentId);
+              setChatMessages(Array.isArray(res.messages) ? res.messages : []);
+            } else if (evt.type === 'debug_updated') {
+              const res = await devmindApi.getDebugAnalyses(currentId);
+              setDebugAnalyses(Array.isArray(res.analyses) ? res.analyses : []);
+            }
+          }
+
+          await refreshGlobalMeta();
+        } catch {
+          // Ignore malformed keepalive frames
+        }
+      };
+
+      source.onerror = () => {
+        setSseConnected(false);
+        source?.close();
+        if (!closed) {
+          reconnectTimer = setTimeout(connect, 2500);
+        }
+      };
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      setSseConnected(false);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      source?.close();
+    };
+  }, [session, refreshGlobalMeta]);
+
+  // Global Keyboard Shortcuts
+  useEffect(() => {
+    if (!session) return;
     const onKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === 'k') {
@@ -191,11 +318,12 @@ export default function App() {
       } else if (e.key === 'Escape') {
         setCommandPaletteOpen(false);
         setImportModalOpen(false);
+        setCreatingFile(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [session]);
 
   // Panel Drag Resizing
   useEffect(() => {
@@ -203,9 +331,9 @@ export default function App() {
       const mode = dragModeRef.current;
       if (!mode) return;
       if (mode === 'left') {
-        setLeftWidth(Math.min(380, Math.max(190, e.clientX)));
+        setLeftWidth(Math.min(360, Math.max(185, e.clientX - 52)));
       } else if (mode === 'right') {
-        setRightWidth(Math.min(560, Math.max(300, window.innerWidth - e.clientX)));
+        setRightWidth(Math.min(540, Math.max(300, window.innerWidth - e.clientX)));
       } else if (mode === 'bottom') {
         setBottomHeight(Math.min(420, Math.max(130, window.innerHeight - e.clientY)));
       }
@@ -227,9 +355,43 @@ export default function App() {
     document.body.style.cursor = mode === 'bottom' ? 'row-resize' : 'col-resize';
   };
 
+  const handleAuthenticated = async (token: string, nextSession: PublicUserSession) => {
+    setStoredSessionToken(token);
+    setSession(nextSession);
+    await bootstrapWorkspace();
+    pushToast(
+      nextSession.llm.configured
+        ? `Connected to ${nextSession.llm.provider} (${nextSession.llm.model})`
+        : 'Entered Local Sandbox Mode — configure your LLM anytime in Settings.',
+      'success'
+    );
+  };
+
+  const handleLogout = async () => {
+    try {
+      await devmindApi.logout();
+    } catch {
+      // ignore
+    }
+    setStoredSessionToken(null);
+    setSession(null);
+  };
+
+  const handleUpdateLlm = async (input: {
+    provider: LlmProviderId;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+  }) => {
+    const res = await devmindApi.updateLlmConfig(input);
+    setSession(res.session);
+    pushToast(`Switched active LLM to ${res.session.llm.provider}/${res.session.llm.model}`, 'success');
+  };
+
   const handleSelectProject = async (projectId: string) => {
     setActiveProjectId(projectId);
     setActiveDiffChange(null);
+    setConfirmDeleteProject(false);
     const proj = projects.find((p) => p.id === projectId);
     if (proj && proj.files[0]) {
       setOpenTabs([proj.files[0].path]);
@@ -239,6 +401,25 @@ export default function App() {
     pushToast(`Switched workspace to ${proj?.name ?? projectId}`, 'info');
   };
 
+  const handleDeleteCurrentProject = async () => {
+    if (!activeProject || projects.length <= 1) return;
+    setConfirmDeleteProject(false);
+    try {
+      const res = await devmindApi.deleteProject(activeProject.id);
+      const nextList = Array.isArray(res.projects) ? res.projects : [];
+      setProjects(nextList);
+      if (nextList[0]) {
+        setActiveProjectId(nextList[0].id);
+        setOpenTabs(nextList[0].files[0] ? [nextList[0].files[0].path] : []);
+        setActiveFilePath(nextList[0].files[0]?.path ?? null);
+        await loadProjectContext(nextList[0].id);
+      }
+      pushToast(`Deleted repository ${activeProject.name}`, 'info');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to delete project', 'error');
+    }
+  };
+
   const handleOpenFileAtLine = (filePath: string, line?: number) => {
     setActiveDiffChange(null);
     setActiveScreen('explorer');
@@ -246,7 +427,7 @@ export default function App() {
     setActiveFilePath(filePath);
     if (line) {
       setHighlightLine(null);
-      setTimeout(() => setHighlightLine(line), 20);
+      setTimeout(() => setHighlightLine(line), 25);
     }
   };
 
@@ -265,14 +446,50 @@ export default function App() {
     setActiveScreen('explorer');
   };
 
-  const handleSaveFile = async (filePath: string, content: string) => {
+  const handleSaveFile = async (filePath: string, content: string, silent = false) => {
     if (!activeProject) return;
     const res = await devmindApi.saveFile(activeProject.id, filePath, content);
     setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
     const secRes = await devmindApi.getSecurityFindings(activeProject.id);
-    setSecurityFindings(secRes.findings);
+    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
     await refreshGlobalMeta();
-    pushToast(`Saved & re-indexed ${filePath}`, 'success');
+    if (!silent) {
+      pushToast(`Saved & synced ${filePath}`, 'success');
+    }
+  };
+
+  const handleCreateNewFile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeProject || !newFilePath.trim()) return;
+    const clean = newFilePath.trim().replace(/^\/+/, '');
+    try {
+      const res = await devmindApi.saveFile(
+        activeProject.id,
+        clean,
+        `// ${clean}\nexport function hello(): string {\n  return 'ready';\n}\n`
+      );
+      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
+      setCreatingFile(false);
+      setNewFilePath('src/newModule.ts');
+      handleOpenFileAtLine(clean, 1);
+      pushToast(`Created ${clean}`, 'success');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to create file', 'error');
+    }
+  };
+
+  const handleDeleteFile = async (filePath: string) => {
+    if (!activeProject) return;
+    try {
+      const res = await devmindApi.deleteFile(activeProject.id, filePath);
+      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
+      handleCloseTab(filePath);
+      const secRes = await devmindApi.getSecurityFindings(activeProject.id);
+      setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
+      pushToast(`Deleted ${filePath}`, 'info');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Delete file failed', 'error');
+    }
   };
 
   const handleReindex = async () => {
@@ -280,7 +497,7 @@ export default function App() {
     const res = await devmindApi.reindexProject(activeProject.id);
     setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
     const secRes = await devmindApi.getSecurityFindings(activeProject.id);
-    setSecurityFindings(secRes.findings);
+    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
     await refreshGlobalMeta();
     pushToast(
       `Indexed ${res.project.files.length} files (${res.project.symbols.length} symbols) in ${res.project.indexingDurationMs}ms`,
@@ -294,12 +511,15 @@ export default function App() {
     setShowBottomPanel(true);
     try {
       const res = await devmindApi.runSandboxTests(activeProject.id);
-      setTestRuns((prev) => [res.testRun, ...prev]);
+      setTestRuns((prev) => [res.testRun, ...prev.filter((r) => r.id !== res.testRun.id)]);
       await refreshGlobalMeta();
+      const covSuffix = res.testRun.coverage
+        ? ` · ${res.testRun.coverage.linePercent.toFixed(1)}% line coverage`
+        : '';
       pushToast(
         res.testRun.status === 'passed'
-          ? `Sandbox verified: ${res.testRun.passedCount}/${res.testRun.totalCount} tests passed`
-          : `Sandbox run finished: ${res.testRun.failedCount}/${res.testRun.totalCount} test(s) failed`,
+          ? `Sandbox verified: ${res.testRun.passedCount}/${res.testRun.totalCount} passed${covSuffix}`
+          : `Sandbox run: ${res.testRun.passedCount}/${res.testRun.totalCount} passed${covSuffix}`,
         res.testRun.status === 'passed' ? 'success' : 'warning'
       );
       return res.testRun;
@@ -314,7 +534,8 @@ export default function App() {
   const handleStartTask = async (
     title: string,
     description: string,
-    executionMode: 'approval' | 'strict_sandbox'
+    executionMode: 'approval' | 'strict_sandbox',
+    priority: TaskPriority = 'medium'
   ) => {
     if (!activeProject) return;
     setAgentBusy(true);
@@ -325,6 +546,7 @@ export default function App() {
         title,
         description,
         executionMode,
+        priority,
       });
       setTasks((prev) => [res.task, ...prev.filter((t) => t.id !== res.task.id)]);
       setActiveTaskId(res.task.id);
@@ -333,12 +555,12 @@ export default function App() {
         devmindApi.getTestRuns(activeProject.id),
         devmindApi.getSecurityFindings(activeProject.id),
       ]);
-      setTestRuns(testRes.testRuns);
-      setSecurityFindings(secRes.findings);
+      setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
+      setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
       await refreshGlobalMeta();
 
       if (res.task.status === 'awaiting_approval') {
-        pushToast('Approval checkpoint ready: review diffs before applying patches.', 'warning');
+        pushToast('Approval checkpoint ready: inspect proposed diffs before applying.', 'warning');
         if (res.task.changes[0]) {
           setActiveDiffChange(res.task.changes[0]);
           setActiveScreen('explorer');
@@ -361,16 +583,16 @@ export default function App() {
       const res = await devmindApi.decideApproval(approvalId, decision);
       setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
       setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      setSecurityFindings(res.securityFindings);
+      setSecurityFindings(Array.isArray(res.securityFindings) ? res.securityFindings : []);
       const testRes = await devmindApi.getTestRuns(activeProject.id);
-      setTestRuns(testRes.testRuns);
+      setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
       await refreshGlobalMeta();
 
       if (decision === 'reject') {
-        pushToast('Proposed changes rejected. Workspace left untouched.', 'info');
+        pushToast('Proposed changes rejected. Workspace untouched.', 'info');
       } else if (res.task.status === 'completed') {
         setShowBottomPanel(true);
-        pushToast('Patches applied and verified: all sandbox tests passed.', 'success');
+        pushToast('Patches applied & verified: all sandbox tests passed.', 'success');
       } else {
         setShowBottomPanel(true);
         pushToast(res.task.errorMessage || 'Sandbox verification reported failing tests.', 'warning');
@@ -386,7 +608,7 @@ export default function App() {
       const res = await devmindApi.rollbackTask(taskId);
       setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
       setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      setSecurityFindings(res.securityFindings);
+      setSecurityFindings(Array.isArray(res.securityFindings) ? res.securityFindings : []);
       await refreshGlobalMeta();
       pushToast('Workspace restored from rollback snapshot.', 'success');
     } catch (err) {
@@ -399,7 +621,7 @@ export default function App() {
     setChatBusy(true);
     try {
       const res = await devmindApi.sendChatMessage(activeProject.id, message);
-      setChatMessages(res.messages);
+      setChatMessages(Array.isArray(res.messages) ? res.messages : []);
       await refreshGlobalMeta();
     } catch (err) {
       pushToast(err instanceof Error ? err.message : 'Repo chat failed', 'error');
@@ -423,10 +645,21 @@ export default function App() {
     }
   };
 
+  const handleUpdateTaskPriority = async (taskId: string, priority: TaskPriority) => {
+    try {
+      const res = await devmindApi.updateTaskPriority(taskId, priority);
+      setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
+      await refreshGlobalMeta();
+      pushToast(`Task priority updated to ${priority.toUpperCase()}`, 'info');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Failed to update task priority', 'error');
+    }
+  };
+
   const handleDispatchPromptToAgent = (prompt: string) => {
     setDraftTaskPrompt(prompt);
     setShowRightPanel(true);
-    void handleStartTask(prompt.slice(0, 62), prompt, 'approval');
+    void handleStartTask(prompt.slice(0, 62), prompt, 'approval', 'high');
   };
 
   const handleLaunchMilestoneDemo = () => {
@@ -456,7 +689,7 @@ export default function App() {
 
   const handleUpdatePolicy = async (actionType: string, level: PermissionLevel) => {
     const res = await devmindApi.updatePolicy(actionType, level);
-    setPolicies(res.policies);
+    setPolicies(Array.isArray(res.policies) ? res.policies : []);
     await refreshGlobalMeta();
     pushToast(`Updated policy for ${actionType}`, 'info');
   };
@@ -467,9 +700,8 @@ export default function App() {
     pushToast('Updated workspace spending guardrails.', 'success');
   };
 
-  // Group project files by directory for clean Left File Explorer Tree
   const groupedFiles = useMemo(() => {
-    if (!activeProject) return [];
+    if (!activeProject || !Array.isArray(activeProject.files)) return [];
     const dirs = new Map<string, typeof activeProject.files>();
     for (const file of activeProject.files) {
       const idx = file.path.lastIndexOf('/');
@@ -481,55 +713,71 @@ export default function App() {
     return Array.from(dirs.entries()).sort(([a], [b]) => a.localeCompare(b));
   }, [activeProject]);
 
-  if (loadingBoot || !activeProject) {
+  if (checkingAuth) {
     return (
-      <div className="h-screen w-screen bg-[#0D0F14] flex flex-col items-center justify-center gap-3 text-[#A3AABF]">
+      <div className="h-screen w-screen bg-[#090B10] flex flex-col items-center justify-center gap-3 text-[#A3AABF]">
         <div className="text-[16px] font-semibold text-[#E6E9F2]">DevMind AI</div>
         <div className="w-48 h-1.5 rounded-full skeleton-shimmer" />
       </div>
     );
   }
 
-  const navItems: Array<{ id: ScreenId; label: string; icon: React.ReactNode; count?: number }> = [
-    { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'explorer', label: 'Repository Explorer', icon: <FileCode2 className="w-4 h-4" /> },
+  if (!session) {
+    return <LoginGate presets={presets} onAuthenticated={handleAuthenticated} />;
+  }
+
+  if (loadingWorkspace || !activeProject) {
+    return (
+      <div className="h-screen w-screen bg-[#090B10] flex flex-col items-center justify-center gap-3 text-[#A3AABF]">
+        <div className="text-[15px] font-semibold text-[#E6E9F2]">Loading Obsidian Studio Workspace...</div>
+        <div className="w-48 h-1.5 rounded-full skeleton-shimmer" />
+      </div>
+    );
+  }
+
+  const navItems: Array<{ id: ScreenId; label: string; icon: React.ReactNode; badge?: number }> = [
+    { id: 'explorer', label: 'Code Studio', icon: <FileCode2 className="w-4 h-4" /> },
+    { id: 'dashboard', label: 'Overview Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'brain', label: 'Repository Brain', icon: <Cpu className="w-4 h-4" /> },
     { id: 'debugging', label: 'Debugging Center', icon: <Bug className="w-4 h-4" /> },
     {
       id: 'security',
       label: 'Security Center',
       icon: <Shield className="w-4 h-4" />,
-      count: securityFindings.length > 0 ? securityFindings.length : undefined,
+      badge: securityFindings.length > 0 ? securityFindings.length : undefined,
     },
     {
       id: 'history',
       label: 'Execution History',
       icon: <Activity className="w-4 h-4" />,
-      count: tasks.length > 0 ? tasks.length : undefined,
+      badge: tasks.length > 0 ? tasks.length : undefined,
     },
-    { id: 'settings', label: 'Policy & Usage', icon: <Settings className="w-4 h-4" /> },
+    { id: 'settings', label: 'BYOK LLM & Governance', icon: <Settings className="w-4 h-4" /> },
   ];
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#0D0F14] text-[#E6E9F2] overflow-hidden">
-      {/* Top Bar (Clean Single Row) */}
-      <header className="h-11 px-4 bg-[#151821] border-b border-[#262B3A] flex items-center justify-between gap-6 shrink-0">
-        {/* Left: Wordmark + Project Selector */}
-        <div className="flex items-center gap-4 min-w-0">
+    <div className="h-screen w-screen flex flex-col bg-[#090B10] text-[#E6E9F2] overflow-hidden">
+      {/* Modern Balanced Top Header */}
+      <header className="h-11 px-3.5 bg-[#10131C] border-b border-[#1E2433] flex items-center justify-between gap-4 shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
           <button
+            type="button"
             onClick={() => setActiveScreen('dashboard')}
-            className="text-[15px] font-bold tracking-tight text-[#E6E9F2] whitespace-nowrap shrink-0"
+            className="flex items-center gap-2 whitespace-nowrap shrink-0"
           >
-            DevMind AI
+            <span className="w-6 h-6 rounded-[6px] bg-[#5B7CFF] text-[#090B10] font-bold text-[12px] flex items-center justify-center">
+              D
+            </span>
+            <span className="text-[14px] font-bold tracking-tight text-[#E6E9F2]">DevMind AI</span>
           </button>
 
-          <span className="text-[#353B50]" aria-hidden="true">/</span>
+          <span className="text-[#2B3347]" aria-hidden="true">/</span>
 
           <select
             aria-label="Active workspace repository"
             value={activeProject.id}
             onChange={(e) => void handleSelectProject(e.target.value)}
-            className="bg-[#0F1117] border border-[#262B3A] hover:border-[#353B50] rounded-[6px] px-2.5 py-1 font-mono text-[12px] text-[#E6E9F2] outline-none max-w-[200px] truncate"
+            className="bg-[#090B10] border border-[#262E42] hover:border-[#3A4560] rounded-[6px] px-2.5 py-1 font-mono text-[12px] text-[#E6E9F2] outline-none max-w-[190px] truncate"
           >
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -537,205 +785,315 @@ export default function App() {
               </option>
             ))}
           </select>
+
+          <span className="hidden xl:inline-flex items-center gap-1.5 text-[11px] font-mono text-[#6B728A] whitespace-nowrap">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${sseConnected ? 'bg-[#2FD68B]' : 'bg-[#F5B642]'}`}
+            />
+            <span>{sseConnected ? 'Live Sync' : 'Reconnecting'}</span>
+          </span>
         </div>
 
-        {/* Center: Command Palette Trigger */}
+        {/* Center Command Palette */}
         <button
+          type="button"
           onClick={() => setCommandPaletteOpen(true)}
-          className="hidden md:flex items-center justify-between gap-6 w-80 px-3 py-1.5 rounded-[6px] bg-[#0F1117] hover:bg-[#1C2030] border border-[#262B3A] text-[12px] text-[#6B728A] transition-colors duration-120 whitespace-nowrap"
+          className="hidden md:flex items-center justify-between gap-6 w-72 lg:w-80 px-3 py-1.5 rounded-[7px] bg-[#090B10] hover:bg-[#161A26] border border-[#1E2433] text-[12px] text-[#6B728A] transition-colors whitespace-nowrap"
         >
           <span className="flex items-center gap-2">
             <Search className="w-3.5 h-3.5" />
-            <span>Search files, symbols, commands...</span>
+            <span>Search files, symbols, actions...</span>
           </span>
           <span className="font-mono text-[11px] text-[#A3AABF]">Ctrl+K</span>
         </button>
 
-        {/* Right: Primary Action + Panel Toggles */}
+        {/* Right Controls */}
         <div className="flex items-center gap-2 shrink-0">
           <button
+            type="button"
+            onClick={() => setActiveScreen('settings')}
+            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-[#A3AABF] hover:text-[#E6E9F2] bg-[#090B10] border border-[#1E2433] rounded-[6px] whitespace-nowrap max-w-[170px] truncate"
+            title="Switch or test your connected LLM API"
+          >
+            <KeyRound className="w-3 h-3 text-[#5B7CFF] shrink-0" />
+            <span className="truncate">
+              {session.llm.configured ? `${session.llm.provider}/${session.llm.model}` : 'Set LLM API'}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => void handleRunSandboxTests()}
             disabled={runningTests}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] disabled:opacity-60 text-[#0D0F14] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold bg-[#5B7CFF] hover:bg-[#7C96FF] disabled:opacity-60 text-[#090B10] rounded-[6px] transition-colors whitespace-nowrap"
           >
             <Play className="w-3.5 h-3.5" />
             <span>{runningTests ? 'Testing...' : 'Run Tests'}</span>
           </button>
 
-          <div className="flex items-center gap-0.5 pl-2 border-l border-[#262B3A]">
+          <div className="flex items-center gap-0.5 pl-2 border-l border-[#1E2433]">
             <button
-              onClick={() => setShowLeftPanel((v) => !v)}
-              title="Toggle Left Sidebar"
-              aria-label="Toggle Left Sidebar"
-              className={`p-1.5 rounded-[5px] transition-colors duration-120 ${
-                showLeftPanel ? 'text-[#E6E9F2] bg-[#1C2030]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
+              type="button"
+              onClick={() => setShowExplorerDrawer((v) => !v)}
+              title="Toggle File Explorer"
+              aria-label="Toggle File Explorer"
+              className={`p-1.5 rounded-[5px] transition-colors ${
+                showExplorerDrawer ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
               }`}
             >
               <PanelLeft className="w-4 h-4" />
             </button>
             <button
+              type="button"
               onClick={() => setShowBottomPanel((v) => !v)}
-              title="Toggle Bottom Sandbox Panel"
-              aria-label="Toggle Bottom Sandbox Panel"
-              className={`p-1.5 rounded-[5px] transition-colors duration-120 ${
-                showBottomPanel ? 'text-[#E6E9F2] bg-[#1C2030]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
+              title="Toggle Sandbox Terminal"
+              aria-label="Toggle Sandbox Terminal"
+              className={`p-1.5 rounded-[5px] transition-colors ${
+                showBottomPanel ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
               }`}
             >
               <PanelBottom className="w-4 h-4" />
             </button>
             <button
+              type="button"
               onClick={() => setShowRightPanel((v) => !v)}
               title="Toggle AI Panel (Ctrl+J)"
               aria-label="Toggle AI Panel"
-              className={`p-1.5 rounded-[5px] transition-colors duration-120 ${
-                showRightPanel ? 'text-[#E6E9F2] bg-[#1C2030]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
+              className={`p-1.5 rounded-[5px] transition-colors ${
+                showRightPanel ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
               }`}
             >
               <PanelRight className="w-4 h-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleLogout()}
+              title={`Sign out (${session.email})`}
+              aria-label="Sign out"
+              className="p-1.5 rounded-[5px] text-[#6B728A] hover:text-[#FF5468] transition-colors"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
       </header>
 
-      {/* Main 4-Panel Resizable Workspace */}
+      {/* Main Studio Area: Slim Activity Rail + Explorer Drawer + Center/Bottom + Right AI */}
       <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* LEFT PANEL: Navigation + File Explorer */}
-        {showLeftPanel && (
+        {/* Slim 52px Activity Rail */}
+        <nav
+          aria-label="Primary Workspace Navigation"
+          className="w-[52px] bg-[#0D1017] border-r border-[#1E2433] flex flex-col items-center py-2.5 gap-1.5 shrink-0"
+        >
+          {navItems.map((item) => {
+            const isActive = activeScreen === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                title={item.label}
+                aria-label={item.label}
+                onClick={() => setActiveScreen(item.id)}
+                className={`relative w-9 h-9 rounded-[8px] flex items-center justify-center transition-colors ${
+                  isActive
+                    ? 'bg-[#5B7CFF]/20 text-[#7C96FF]'
+                    : 'text-[#6B728A] hover:text-[#E6E9F2] hover:bg-[#161A26]'
+                }`}
+              >
+                {item.icon}
+                {item.badge !== undefined && (
+                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#161A26] border border-[#2B3347] font-mono text-[9px] text-[#E6E9F2] flex items-center justify-center tabular-nums">
+                    {item.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Collapsible Project File Explorer Drawer */}
+        {showExplorerDrawer && (
           <>
             <aside
               style={{ width: leftWidth }}
-              className="flex flex-col bg-[#151821] border-r border-[#262B3A] shrink-0 min-h-0"
+              className="flex flex-col bg-[#10131C] border-r border-[#1E2433] shrink-0 min-h-0"
             >
-              {/* Navigation Tree */}
-              <nav aria-label="Primary Workspace Navigation" className="p-2 space-y-0.5 border-b border-[#262B3A] shrink-0">
-                {navItems.map((item) => {
-                  const isActive = activeScreen === item.id;
-                  return (
+              <div className="flex items-center justify-between px-3 h-10 border-b border-[#1E2433] shrink-0">
+                <span className="text-[12px] font-semibold text-[#E6E9F2] truncate">
+                  Explorer
+                </span>
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setCreatingFile((v) => !v)}
+                    title="New File"
+                    aria-label="New File"
+                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
+                  >
+                    <FilePlus2 className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setImportModalOpen(true)}
+                    title="Import Local Repository"
+                    aria-label="Import Local Repository"
+                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
+                  >
+                    <FolderPlus className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleReindex()}
+                    title="Re-index Repository"
+                    aria-label="Re-index Repository"
+                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                  </button>
+                  {projects.length > 1 && (
                     <button
-                      key={item.id}
-                      onClick={() => setActiveScreen(item.id)}
-                      className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-[6px] text-[13px] font-medium transition-colors duration-120 whitespace-nowrap ${
-                        isActive
-                          ? 'bg-[#1C2030] text-[#E6E9F2]'
-                          : 'text-[#A3AABF] hover:text-[#E6E9F2] hover:bg-[#1C2030]/50'
-                      }`}
+                      type="button"
+                      onClick={() => setConfirmDeleteProject((v) => !v)}
+                      title="Delete Active Project"
+                      aria-label="Delete Active Project"
+                      className="p-1 text-[#6B728A] hover:text-[#FF5468] rounded hover:bg-[#161A26]"
                     >
-                      <span className="flex items-center gap-2.5 truncate">
-                        <span className={isActive ? 'text-[#6C7BFF]' : 'text-[#6B728A]'}>
-                          {item.icon}
-                        </span>
-                        <span className="truncate">{item.label}</span>
-                      </span>
-                      {item.count !== undefined && (
-                        <span
-                          className={`font-mono text-[11px] tabular-nums ${
-                            item.id === 'security' ? 'text-[#FF7A45]' : 'text-[#6B728A]'
-                          }`}
-                        >
-                          {item.count}
-                        </span>
-                      )}
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
-                  );
-                })}
-              </nav>
+                  )}
+                </div>
+              </div>
 
-              {/* Repository File Tree */}
-              <div className="flex-1 flex flex-col min-h-0">
-                <div className="flex items-center justify-between px-3 py-2 border-b border-[#262B3A] shrink-0">
-                  <span className="text-[11px] font-semibold text-[#6B728A] tracking-wide">
-                    Workspace Files
-                  </span>
-                  <div className="flex items-center gap-1">
+              {confirmDeleteProject && projects.length > 1 && (
+                <div className="p-2.5 border-b border-[#FF5468]/30 bg-[#FF5468]/10 space-y-2 text-[11px]">
+                  <p className="text-[#E6E9F2]">
+                    Delete <span className="font-mono text-[#FF5468]">{activeProject.name}</span> from workspace?
+                  </p>
+                  <div className="flex items-center justify-end gap-1.5">
                     <button
-                      onClick={() => setImportModalOpen(true)}
-                      title="Import Local Repository"
-                      aria-label="Import Local Repository"
-                      className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#1C2030]"
+                      type="button"
+                      onClick={() => setConfirmDeleteProject(false)}
+                      className="px-2 py-0.5 text-[#A3AABF] hover:text-[#E6E9F2]"
                     >
-                      <FolderPlus className="w-3.5 h-3.5" />
+                      Cancel
                     </button>
                     <button
-                      onClick={() => void handleReindex()}
-                      title="Incremental Re-index"
-                      aria-label="Incremental Re-index"
-                      className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#1C2030]"
+                      type="button"
+                      onClick={() => void handleDeleteCurrentProject()}
+                      className="px-2 py-0.5 font-semibold bg-[#FF5468] text-[#090B10] rounded-[4px]"
                     >
-                      <RefreshCw className="w-3.5 h-3.5" />
+                      Confirm Delete
                     </button>
                   </div>
                 </div>
+              )}
 
-                <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                  {groupedFiles.map(([dir, files]) => {
-                    const collapsed = Boolean(collapsedDirs[dir]);
-                    return (
-                      <div key={dir}>
-                        <button
-                          onClick={() =>
-                            setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))
-                          }
-                          className="w-full flex items-center gap-1.5 px-1.5 py-1 text-[12px] text-[#A3AABF] hover:text-[#E6E9F2] rounded"
-                        >
-                          {collapsed ? (
-                            <ChevronRight className="w-3.5 h-3.5 text-[#6B728A]" />
-                          ) : (
-                            <ChevronDown className="w-3.5 h-3.5 text-[#6B728A]" />
-                          )}
-                          <Folder className="w-3.5 h-3.5 text-[#6C7BFF]/80 shrink-0" />
-                          <span className="font-mono text-[12px] truncate">{dir}</span>
-                        </button>
+              {/* Inline New File Creator */}
+              {creatingFile && (
+                <form
+                  onSubmit={(e) => void handleCreateNewFile(e)}
+                  className="p-2 border-b border-[#1E2433] bg-[#0B0E14] space-y-1.5"
+                >
+                  <input
+                    type="text"
+                    value={newFilePath}
+                    onChange={(e) => setNewFilePath(e.target.value)}
+                    placeholder="src/helper.ts"
+                    autoFocus
+                    className="w-full bg-[#10131C] border border-[#5B7CFF] rounded-[5px] px-2 py-1 font-mono text-[11px] text-[#E6E9F2] outline-none"
+                  />
+                  <div className="flex items-center justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCreatingFile(false)}
+                      className="text-[11px] text-[#6B728A] hover:text-[#E6E9F2]"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-2 py-0.5 text-[11px] font-semibold bg-[#5B7CFF] text-[#090B10] rounded-[4px]"
+                    >
+                      Create
+                    </button>
+                  </div>
+                </form>
+              )}
 
-                        {!collapsed && (
-                          <div className="pl-4 space-y-0.5 mt-0.5">
-                            {files.map((file) => {
-                              const fileName = file.path.split('/').pop() ?? file.path;
-                              const isSelected =
-                                activeScreen === 'explorer' && activeFilePath === file.path && !activeDiffChange;
-                              const issueCount = securityFindings.filter(
-                                (f) => f.filePath === file.path
-                              ).length;
-                              return (
-                                <button
-                                  key={file.path}
-                                  onClick={() => handleOpenFileAtLine(file.path, 1)}
-                                  className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded-[5px] text-left transition-colors duration-120 ${
-                                    isSelected
-                                      ? 'bg-[#1C2030] text-[#E6E9F2]'
-                                      : 'text-[#A3AABF] hover:text-[#E6E9F2] hover:bg-[#1C2030]/40'
-                                  }`}
-                                >
-                                  <span className="font-mono text-[12px] truncate">{fileName}</span>
-                                  <span className="flex items-center gap-1.5 font-mono text-[11px] shrink-0">
-                                    {file.gitStatus === 'modified' && (
-                                      <span className="text-[#F5B84B]" title="Modified">
-                                        M
-                                      </span>
-                                    )}
-                                    {issueCount > 0 && (
-                                      <span className="text-[#FF5C6C] tabular-nums" title={`${issueCount} security findings`}>
-                                        {issueCount}
-                                      </span>
-                                    )}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
+              {/* File Tree */}
+              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {groupedFiles.map(([dir, files]) => {
+                  const collapsed = Boolean(collapsedDirs[dir]);
+                  return (
+                    <div key={dir}>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))
+                        }
+                        className="w-full flex items-center gap-1.5 px-1.5 py-1 text-[12px] text-[#A3AABF] hover:text-[#E6E9F2] rounded"
+                      >
+                        {collapsed ? (
+                          <ChevronRight className="w-3.5 h-3.5 text-[#6B728A]" />
+                        ) : (
+                          <ChevronDown className="w-3.5 h-3.5 text-[#6B728A]" />
                         )}
-                      </div>
-                    );
-                  })}
-                </div>
+                        <Folder className="w-3.5 h-3.5 text-[#5B7CFF]/80 shrink-0" />
+                        <span className="font-mono text-[12px] truncate">{dir}</span>
+                      </button>
+
+                      {!collapsed && (
+                        <div className="pl-4 space-y-0.5 mt-0.5">
+                          {files.map((file) => {
+                            const fileName = file.path.split('/').pop() ?? file.path;
+                            const isSelected =
+                              activeScreen === 'explorer' && activeFilePath === file.path && !activeDiffChange;
+                            const issueCount = securityFindings.filter(
+                              (f) => f.filePath === file.path
+                            ).length;
+                            return (
+                              <button
+                                key={file.path}
+                                type="button"
+                                onClick={() => handleOpenFileAtLine(file.path)}
+                                className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded-[5px] text-left transition-colors ${
+                                  isSelected
+                                    ? 'bg-[#161A26] text-[#E6E9F2]'
+                                    : 'text-[#A3AABF] hover:text-[#E6E9F2] hover:bg-[#161A26]/40'
+                                }`}
+                              >
+                                <span className="font-mono text-[12px] truncate">{fileName}</span>
+                                <span className="flex items-center gap-1.5 font-mono text-[11px] shrink-0">
+                                  {file.gitStatus === 'modified' && (
+                                    <span className="text-[#F5B642]" title="Modified">
+                                      M
+                                    </span>
+                                  )}
+                                  {issueCount > 0 && (
+                                    <span
+                                      className="text-[#FF5468] tabular-nums"
+                                      title={`${issueCount} security findings`}
+                                    >
+                                      {issueCount}
+                                    </span>
+                                  )}
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </aside>
 
-            {/* Left Resize Handle */}
             <div
               role="separator"
               aria-orientation="vertical"
               onMouseDown={() => beginDrag('left')}
-              className="w-1 bg-transparent hover:bg-[#6C7BFF]/60 cursor-col-resize transition-colors duration-120 shrink-0"
+              className="w-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-col-resize transition-colors shrink-0"
             />
           </>
         )}
@@ -781,6 +1139,7 @@ export default function App() {
                 onCloseTab={handleCloseTab}
                 onCloseDiff={() => setActiveDiffChange(null)}
                 onSaveFile={handleSaveFile}
+                onDeleteFile={handleDeleteFile}
                 onJumpToLine={handleOpenFileAtLine}
               />
             )}
@@ -825,28 +1184,30 @@ export default function App() {
                 }}
                 onInspectDiff={handleInspectDiff}
                 onRollbackTask={handleRollbackTask}
+                onUpdateTaskPriority={handleUpdateTaskPriority}
               />
             )}
 
             {activeScreen === 'settings' && (
               <SettingsPolicyView
+                session={session}
                 policies={policies}
-                providers={providers}
+                presets={presets}
                 usage={usage}
+                onUpdateLlm={handleUpdateLlm}
                 onUpdatePolicy={handleUpdatePolicy}
                 onUpdateBudget={handleUpdateBudget}
               />
             )}
           </main>
 
-          {/* BOTTOM PANEL: Sandbox Terminal, Test Results & Audit */}
           {showBottomPanel && (
             <>
               <div
                 role="separator"
                 aria-orientation="horizontal"
                 onMouseDown={() => beginDrag('bottom')}
-                className="h-1 bg-transparent hover:bg-[#6C7BFF]/60 cursor-row-resize transition-colors duration-120 shrink-0"
+                className="h-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-row-resize transition-colors shrink-0"
               />
               <div style={{ height: bottomHeight }} className="shrink-0 min-h-0">
                 <BottomSandboxPanel
@@ -863,18 +1224,19 @@ export default function App() {
           )}
         </div>
 
-        {/* RIGHT PANEL: AI Engineering Workspace */}
+        {/* RIGHT AI PANEL */}
         {showRightPanel && (
           <>
             <div
               role="separator"
               aria-orientation="vertical"
               onMouseDown={() => beginDrag('right')}
-              className="w-1 bg-transparent hover:bg-[#6C7BFF]/60 cursor-col-resize transition-colors duration-120 shrink-0"
+              className="w-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-col-resize transition-colors shrink-0"
             />
             <div style={{ width: rightWidth }} className="shrink-0 min-h-0">
               <AiWorkspacePanel
                 project={activeProject}
+                session={session}
                 activeTask={activeTask}
                 chatMessages={chatMessages}
                 agentBusy={agentBusy}
@@ -887,6 +1249,7 @@ export default function App() {
                 onSendChat={handleSendChat}
                 onInspectDiff={handleInspectDiff}
                 onOpenFileAtLine={handleOpenFileAtLine}
+                onOpenLlmSettings={() => setActiveScreen('settings')}
               />
             </div>
           </>
@@ -913,23 +1276,22 @@ export default function App() {
         onCreateProject={handleCreateProject}
       />
 
-      {/* Toast Notifications (Section 5: bottom-right, 220ms slide-in, auto-dismiss 4000ms) */}
       {toasts.length > 0 && (
         <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm pointer-events-none">
           {toasts.map((toast) => (
             <div
               key={toast.id}
-              className={`toast-animate-in pointer-events-auto px-3.5 py-2.5 rounded-[8px] bg-[#1C2030] border text-[12px] text-[#E6E9F2] shadow-lg flex items-center gap-2 ${
+              className={`toast-animate-in pointer-events-auto px-3.5 py-2.5 rounded-[8px] bg-[#161A26] border text-[12px] text-[#E6E9F2] shadow-lg flex items-center gap-2 ${
                 toast.tone === 'success'
-                  ? 'border-[#3DD68C]/50'
+                  ? 'border-[#2FD68B]/50'
                   : toast.tone === 'warning'
-                    ? 'border-[#F5B84B]/60'
+                    ? 'border-[#F5B642]/60'
                     : toast.tone === 'error'
-                      ? 'border-[#FF5C6C]/60'
-                      : 'border-[#353B50]'
+                      ? 'border-[#FF5468]/60'
+                      : 'border-[#2B3347]'
               }`}
             >
-              <Bot className="w-3.5 h-3.5 text-[#6C7BFF] shrink-0" />
+              <Bot className="w-3.5 h-3.5 text-[#5B7CFF] shrink-0" />
               <span>{toast.message}</span>
             </div>
           ))}

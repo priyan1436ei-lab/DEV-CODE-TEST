@@ -1,0 +1,26 @@
+appId: ai.devmind.studio
+productName: DevMind AI
+copyright: Copyright © 2026 DevMind AI
+directories:
+  output: dist-electron
+files:
+  - dist/**/*
+  - server/**/*
+  - server.ts
+  - src/types/**/*
+  - electron/**/*
+  - package.json
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  artifactName: DevMind-AI-${version}-${arch}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true

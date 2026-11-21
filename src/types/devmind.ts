@@ -1,3 +1,35 @@
+export type LlmProviderId =
+  | 'openai'
+  | 'openrouter'
+  | 'anthropic'
+  | 'groq'
+  | 'deepseek'
+  | 'ollama'
+  | 'custom';
+
+export interface UserLlmConfig {
+  provider: LlmProviderId;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  configured: boolean;
+}
+
+export interface PublicUserSession {
+  sessionId: string;
+  displayName: string;
+  email: string;
+  llm: {
+    provider: LlmProviderId;
+    baseUrl: string;
+    model: string;
+    hasApiKey: boolean;
+    maskedKey: string;
+    configured: boolean;
+  };
+  createdAt: string;
+}
+
 export type TaskStatus =
   | 'pending'
   | 'planning'
@@ -7,6 +39,8 @@ export type TaskStatus =
   | 'completed'
   | 'failed'
   | 'cancelled';
+
+export type TaskPriority = 'high' | 'medium' | 'low';
 
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
@@ -216,6 +250,7 @@ export interface AgentTask {
   title: string;
   description: string;
   status: TaskStatus;
+  priority: TaskPriority;
   executionMode: 'approval' | 'strict_sandbox';
   modelProvider: string;
   modelName: string;

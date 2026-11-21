@@ -1,26 +1,26 @@
 @import "tailwindcss";
 
 :root {
-  /* Section 5 Design System Color Tokens */
-  --bg-app: #0D0F14;
-  --bg-panel: #151821;
-  --bg-panel-raised: #1C2030;
-  --bg-editor: #0F1117;
-  --border-subtle: #262B3A;
-  --border-strong: #353B50;
+  /* Obsidian Studio Design System Tokens */
+  --bg-app: #090B10;
+  --bg-panel: #10131C;
+  --bg-panel-raised: #161A26;
+  --bg-editor: #0B0E14;
+  --border-subtle: #1E2433;
+  --border-strong: #2B3347;
   --text-primary: #E6E9F2;
   --text-secondary: #A3AABF;
   --text-muted: #6B728A;
-  --accent-primary: #6C7BFF;
-  --accent-hover: #8793FF;
-  --accent-glow: rgba(108, 123, 255, 0.25);
-  --success: #3DD68C;
-  --warning: #F5B84B;
-  --danger: #FF5C6C;
+  --accent-primary: #5B7CFF;
+  --accent-hover: #7C96FF;
+  --accent-glow: rgba(91, 124, 255, 0.25);
+  --success: #2FD68B;
+  --warning: #F5B642;
+  --danger: #FF5468;
   --info: #4DB8FF;
   --testing: #B38CFF;
-  --diff-add-bg: rgba(61, 214, 140, 0.14);
-  --diff-remove-bg: rgba(255, 92, 108, 0.14);
+  --diff-add-bg: rgba(47, 214, 139, 0.14);
+  --diff-remove-bg: rgba(255, 84, 104, 0.14);
 
   /* Severity Colors */
   --severity-critical: #FF3B4E;

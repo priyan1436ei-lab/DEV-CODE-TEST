@@ -1,6 +1,6 @@
 {
   "name": "DevMind AI",
-  "description": "Autonomous AI software engineering platform with repository intelligence, approval-gated multi-file coding, and sandboxed test verification.",
+  "description": "Autonomous AI software engineering studio with BYOK LLM gateway, real-time synced code editor, repository brain, approval checkpoints, and sandboxed test coverage.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
