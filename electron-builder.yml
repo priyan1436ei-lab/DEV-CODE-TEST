@@ -26,9 +26,9 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: DevMind-Studio-${version}-${arch}-${target}.${ext}
   requestedExecutionLevel: asInvoker
 nsis:
+  artifactName: DevMind-Studio-${version}-${arch}-Setup.${ext}
   oneClick: false
   perMachine: false
   allowElevation: true
