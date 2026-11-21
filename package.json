@@ -1,8 +1,9 @@
 {
   "name": "devmind-ai",
   "productName": "DevMind Studio",
-  "description": "DevMind Studio - Native Windows Desktop Software Engineering Workbench",
+  "description": "DevMind Studio - Desktop Software Engineering Workbench",
   "author": "DevMind Systems",
+  "license": "MIT",
   "private": true,
   "version": "1.0.0",
   "type": "module",
@@ -11,9 +12,10 @@
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "build": "vite build",
-    "build:win": "npm run build && node scripts/ensure-win-icon.mjs && electron-builder --win --x64 --config electron-builder.yml --publish never",
+    "build:server": "node scripts/build-server.mjs",
+    "build:win": "npm run build && npm run build:server && node scripts/ensure-win-icon.mjs && electron-builder --win --x64 --config electron-builder.yml --publish never",
     "preview": "vite preview",
-    "clean": "rm -rf dist dist-electron server.js",
+    "clean": "rm -rf dist dist-server dist-electron server.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {

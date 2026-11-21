@@ -136,8 +136,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       {
         id: 'nav:settings',
         group: 'Navigation',
-        label: 'View: Settings & Windows Runtime',
-        detail: 'Theme, provider key, policies, and .exe packaging',
+        label: 'View: Settings & Desktop Runtime',
+        detail: 'Appearance, provider key, policies, and .exe packaging',
         action: () => {
           onNavigate('settings');
           onClose();
@@ -202,15 +202,16 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/45 flex items-start justify-center pt-[12vh] px-4"
+      className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[6px] flex items-start justify-center pt-[13vh] px-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] shadow-xl overflow-hidden"
+        className="w-full max-w-2xl apple-sheet overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="px-3.5 h-11 border-b border-[var(--border-hairline)] flex items-center gap-2.5 bg-[var(--surface-canvas)]">
-          <Search className="w-4 h-4 text-[var(--ink-muted)] shrink-0" />
+        {/* Spotlight Search Input */}
+        <div className="px-4 h-14 border-b border-[var(--border-hairline)] flex items-center gap-3">
+          <Search className="w-5 h-5 text-[var(--ink-muted)] shrink-0" />
           <input
             type="text"
             value={query}
@@ -231,62 +232,73 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               }
             }}
             autoFocus
-            placeholder="Type a file name, symbol, view, or extension command..."
-            className="flex-1 bg-transparent text-xs text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] focus:outline-none"
+            placeholder="Spotlight Search — files, symbols, views, or commands..."
+            className="flex-1 bg-transparent text-[15px] font-normal text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] focus:outline-none focus:shadow-none"
           />
           <button
             type="button"
             onClick={onClose}
-            className="p-1 text-[var(--ink-muted)] hover:text-[var(--ink-primary)]"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="max-h-[360px] overflow-y-auto divide-y divide-[var(--border-hairline)]">
+        {/* Results */}
+        <div className="max-h-[380px] overflow-y-auto p-2 space-y-0.5">
           {items.length === 0 ? (
-            <div className="px-4 py-8 text-center text-xs text-[var(--ink-muted)]">
+            <div className="px-4 py-10 text-center text-xs text-[var(--ink-muted)]">
               No matching commands, files, or symbols.
             </div>
           ) : (
-            items.map((item, idx) => (
-              <button
-                key={item.id}
-                type="button"
-                onClick={item.action}
-                onMouseEnter={() => setSelectedIndex(idx)}
-                className={`w-full px-3.5 py-2 text-left flex items-center justify-between gap-3 text-xs transition-colors ${
-                  idx === selectedIndex
-                    ? 'bg-[var(--surface-active)] text-[var(--ink-primary)]'
-                    : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)]'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  {item.group === 'Extension Command' ? (
-                    <Play className="w-3.5 h-3.5 text-[var(--accent-primary)] shrink-0" />
-                  ) : item.group === 'File' ? (
-                    <FileCode2 className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
-                  ) : item.group === 'Symbol' ? (
-                    <Code2 className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
-                  ) : (
-                    <Compass className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
-                  )}
-                  <span className="truncate font-medium text-[var(--ink-primary)]">{item.label}</span>
-                </div>
-                <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[200px] shrink-0">
-                  {item.detail}
-                </span>
-              </button>
-            ))
+            items.map((item, idx) => {
+              const isSelected = idx === selectedIndex;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.action}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                  className={`w-full px-3 py-2 rounded-[9px] text-left flex items-center justify-between gap-3 text-[13px] transition-colors ${
+                    isSelected
+                      ? 'bg-[var(--accent-primary)] text-[var(--accent-ink)]'
+                      : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {item.group === 'Extension Command' ? (
+                      <Play className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-[var(--accent-primary)]'}`} />
+                    ) : item.group === 'File' ? (
+                      <FileCode2 className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    ) : item.group === 'Symbol' ? (
+                      <Code2 className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    ) : (
+                      <Compass className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    )}
+                    <span className={`truncate font-medium ${isSelected ? 'text-white' : 'text-[var(--ink-primary)]'}`}>
+                      {item.label}
+                    </span>
+                  </div>
+                  <span
+                    className={`text-[11px] font-mono truncate max-w-[220px] shrink-0 ${
+                      isSelected ? 'text-white/80' : 'text-[var(--ink-muted)]'
+                    }`}
+                  >
+                    {item.detail}
+                  </span>
+                </button>
+              );
+            })
           )}
         </div>
 
-        <div className="px-3.5 py-1.5 border-t border-[var(--border-hairline)] bg-[var(--surface-chrome)] flex items-center justify-between text-[10px] font-mono text-[var(--ink-muted)]">
-          <span className="inline-flex items-center gap-1">
-            <Blocks className="w-3 h-3" />
-            {activeCommands.length} active extension commands
+        {/* Footer */}
+        <div className="px-4 py-2 border-t border-[var(--border-hairline)] bg-[var(--surface-subtle)] flex items-center justify-between text-[11px] font-mono text-[var(--ink-muted)]">
+          <span className="inline-flex items-center gap-1.5">
+            <Blocks className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+            {activeCommands.length} active commands
           </span>
-          <span>↑↓ Navigate · Enter Execute · Esc Close</span>
+          <span>↑↓ Navigate · ↵ Open · Esc Dismiss</span>
         </div>
       </div>
     </div>

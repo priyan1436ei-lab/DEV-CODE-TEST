@@ -123,46 +123,40 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
 
   return (
     <aside className="h-full flex flex-col bg-[var(--surface-sidebar)] border-l border-[var(--border-hairline)] overflow-hidden">
-      {/* Header Tabs */}
-      <div className="h-10 px-3 border-b border-[var(--border-hairline)] bg-[var(--surface-chrome)] flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
+      {/* Apple Inspector Header with Segmented Tabs */}
+      <div className="h-11 px-3 border-b border-[var(--border-hairline)] apple-vibrancy flex items-center justify-between gap-2 shrink-0">
+        <div className="apple-segmented">
           <button
             type="button"
+            data-active={activeTab === 'tasks'}
             onClick={() => setActiveTab('tasks')}
-            className={`h-10 text-xs font-medium border-b-2 inline-flex items-center gap-1.5 transition-colors ${
-              activeTab === 'tasks'
-                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
-                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-            }`}
+            className="apple-segmented-item h-6 px-2.5 text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] inline-flex items-center gap-1.5"
           >
             <TerminalSquare className="w-3.5 h-3.5" />
             Tasks
-            <span className="font-mono tabular-nums text-[11px] text-[var(--ink-muted)]">
+            <span className="font-mono tabular-nums text-[10px] text-[var(--ink-muted)]">
               {safeTasks.length}
             </span>
           </button>
 
           <button
             type="button"
+            data-active={activeTab === 'chat'}
             onClick={() => setActiveTab('chat')}
-            className={`h-10 text-xs font-medium border-b-2 inline-flex items-center gap-1.5 transition-colors ${
-              activeTab === 'chat'
-                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
-                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-            }`}
+            className="apple-segmented-item h-6 px-2.5 text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] inline-flex items-center gap-1.5"
           >
             <MessageSquare className="w-3.5 h-3.5" />
             Ask Repo
           </button>
         </div>
 
-        <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[130px]" title={session.llm.model}>
+        <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[115px]" title={session.llm.model}>
           {session.llm.configured ? session.llm.model : 'Local Rules'}
         </span>
       </div>
 
       {error && (
-        <div className="mx-3 mt-2.5 px-3 py-2 rounded-[4px] border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center justify-between gap-2 shrink-0">
+        <div className="mx-3 mt-2.5 px-3 py-2 rounded-xl border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center justify-between gap-2 shrink-0">
           <span className="truncate">{error}</span>
           <button type="button" onClick={() => setError(null)} className="text-[11px] underline shrink-0">
             Close
@@ -181,7 +175,7 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
               aria-label="Filter tasks by priority"
               value={priorityFilter}
               onChange={(e) => setPriorityFilter(e.target.value as 'all' | TaskPriority)}
-              className="h-6 px-1.5 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              className="h-6 px-2 text-[11px] rounded-md bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
             >
               <option value="all">All Priorities</option>
               <option value="high">High Priority</option>
@@ -193,7 +187,7 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
           {/* Task Stream */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
             {filteredTasks.length === 0 ? (
-              <div className="py-8 px-3 text-center text-xs text-[var(--ink-muted)] border border-dashed border-[var(--border-hairline)] rounded-[4px]">
+              <div className="py-8 px-3 text-center text-xs text-[var(--ink-muted)] border border-dashed border-[var(--border-hairline)] rounded-xl">
                 Describe a code change, refactor, or security remediation below to generate reviewed patches.
               </div>
             ) : (
@@ -204,9 +198,9 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
                 return (
                   <div
                     key={task.id}
-                    className="rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] overflow-hidden"
+                    className="apple-card overflow-hidden"
                   >
-                    <div className="px-3 py-2.5 border-b border-[var(--border-hairline)]">
+                    <div className="px-3.5 py-2.5 border-b border-[var(--border-hairline)]">
                       <div className="flex items-start justify-between gap-2">
                         <div className="text-xs font-semibold text-[var(--ink-primary)] leading-snug">
                           {task.title}

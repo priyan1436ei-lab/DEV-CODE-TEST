@@ -858,262 +858,330 @@ export function App() {
 
   const cloudSyncCount = cloudExtensions.length + cloudTasks.length + cloudProjects.length;
 
-  const navItems: Array<{
+  const workspaceNavItems: Array<{
     id: ScreenId;
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     badge?: number;
   }> = [
     { id: 'explorer', label: 'Code Editor', icon: Code2 },
-    { id: 'dashboard', label: 'Workspace Overview', icon: LayoutDashboard },
-    { id: 'brain', label: 'Architecture & Symbols', icon: GitFork },
+    { id: 'dashboard', label: 'Overview', icon: LayoutDashboard },
+    { id: 'brain', label: 'Architecture', icon: GitFork },
+  ];
+
+  const intelligenceNavItems: Array<{
+    id: ScreenId;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+  }> = [
     {
       id: 'extensions',
-      label: 'Extensions Marketplace',
+      label: 'Extensions',
       icon: Blocks,
       badge: activeExtensionsCount || undefined,
     },
-    { id: 'debugging', label: 'Diagnostics & Debug', icon: Bug },
+    { id: 'debugging', label: 'Diagnostics', icon: Bug },
     {
       id: 'security',
-      label: 'Security Center',
+      label: 'Security',
       icon: ShieldAlert,
       badge: openSecurityCount || undefined,
     },
     { id: 'history', label: 'Task History', icon: History },
   ];
 
+  const isMacPlatform =
+    typeof navigator !== 'undefined' && /mac/i.test(navigator.platform || navigator.userAgent);
+  const shortcutPrefix = isMacPlatform ? '⌘' : 'Ctrl+';
+
   return (
     <div className="h-screen w-screen flex flex-col bg-[var(--surface-canvas)] text-[var(--ink-primary)] overflow-hidden select-none">
-      {/* Native Windows 11 Desktop Title Bar (36px) */}
-      <header className="h-9 bg-[var(--surface-chrome)] border-b border-[var(--border-hairline)] flex items-center justify-between px-2 shrink-0 win-drag-region z-30">
-        {/* Left: Brand + Desktop Menu Bar */}
-        <div className="flex items-center gap-1 win-no-drag">
-          <div className="flex items-center gap-2 px-1.5 mr-1">
+      {/* Apple macOS Sequoia Unified Translucent Toolbar (48px) */}
+      <header
+        onDoubleClick={handleToggleMaximize}
+        className="h-12 apple-vibrancy border-b border-[var(--border-hairline)] flex items-center justify-between px-3.5 shrink-0 win-drag-region z-30"
+      >
+        {/* Left: macOS Traffic Lights + Sidebar Toggle + Brand + Menu Bar */}
+        <div className="flex items-center gap-2 win-no-drag">
+          <div className="group flex items-center gap-2 mr-1.5">
+            <button
+              type="button"
+              onClick={() => window.devmindDesktop?.close()}
+              title="Close Window"
+              aria-label="Close Window"
+              className="w-3 h-3 rounded-full bg-[#FF5F57] border border-black/15 flex items-center justify-center transition-all hover:brightness-95"
+            >
+              <X className="w-2 h-2 text-[#4D0000] opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+            <button
+              type="button"
+              onClick={() => window.devmindDesktop?.minimize()}
+              title="Minimize Window"
+              aria-label="Minimize Window"
+              className="w-3 h-3 rounded-full bg-[#FEBC2E] border border-black/15 flex items-center justify-center transition-all hover:brightness-95"
+            >
+              <Minus className="w-2 h-2 text-[#6B4200] opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+            <button
+              type="button"
+              onClick={handleToggleMaximize}
+              title={isMaximized ? 'Restore Window' : 'Expand Window'}
+              aria-label={isMaximized ? 'Restore Window' : 'Expand Window'}
+              className="w-3 h-3 rounded-full bg-[#28C840] border border-black/15 flex items-center justify-center transition-all hover:brightness-95"
+            >
+              {isMaximized ? (
+                <Minimize2 className="w-1.5 h-1.5 text-[#004D0E] opacity-0 group-hover:opacity-100 transition-opacity" />
+              ) : (
+                <Maximize2 className="w-1.5 h-1.5 text-[#004D0E] opacity-0 group-hover:opacity-100 transition-opacity" />
+              )}
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setExplorerOpen((v) => !v)}
+            title={`Toggle Sidebar (${shortcutPrefix}B)`}
+            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+              explorerOpen
+                ? 'bg-[var(--surface-hover)] text-[var(--ink-primary)]'
+                : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+            }`}
+          >
+            <PanelLeft className="w-4 h-4" />
+          </button>
+
+          <div className="flex items-center gap-2 pl-1 pr-1">
             <img
               src="/icon.png"
               alt="DevMind Studio"
-              className="w-5 h-5 object-contain shrink-0"
+              className="w-5 h-5 rounded-[6px] object-contain shrink-0 shadow-xs"
               draggable={false}
             />
-            <span className="text-xs font-semibold tracking-tight text-[var(--ink-primary)] hidden sm:inline">
+            <span className="text-[13px] font-semibold tracking-tight text-[var(--ink-primary)] hidden sm:inline">
               DevMind Studio
             </span>
           </div>
 
-          {/* Menu Bar */}
-          {(
-            [
-              { id: 'file', label: 'File' },
-              { id: 'view', label: 'View' },
-              { id: 'extensions', label: 'Extensions' },
-              { id: 'help', label: 'Help' },
-            ] as Array<{ id: Exclude<MenuId, null>; label: string }>
-          ).map((menu) => (
-            <div key={menu.id} className="relative">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenMenu((prev) => (prev === menu.id ? null : menu.id));
-                }}
-                className={`h-6 px-2 text-xs rounded-[3px] transition-colors ${
-                  openMenu === menu.id
-                    ? 'bg-[var(--surface-active)] text-[var(--ink-primary)]'
-                    : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
-                }`}
-              >
-                {menu.label}
-              </button>
-
-              {openMenu === menu.id && (
-                <div
-                  onClick={(e) => e.stopPropagation()}
-                  className="absolute left-0 top-7 w-56 rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] shadow-lg py-1 z-50 text-xs"
+          {/* macOS Dropdown Menus */}
+          <div className="hidden lg:flex items-center gap-0.5 pl-1 border-l border-[var(--border-hairline)]">
+            {(
+              [
+                { id: 'file', label: 'File' },
+                { id: 'view', label: 'View' },
+                { id: 'extensions', label: 'Extensions' },
+                { id: 'help', label: 'Help' },
+              ] as Array<{ id: Exclude<MenuId, null>; label: string }>
+            ).map((menu) => (
+              <div key={menu.id} className="relative">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenMenu((prev) => (prev === menu.id ? null : menu.id));
+                  }}
+                  className={`h-7 px-2.5 text-xs font-medium rounded-lg transition-colors ${
+                    openMenu === menu.id
+                      ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)]'
+                      : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                  }`}
                 >
-                  {menu.id === 'file' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setImportModalOpen(true);
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--ink-primary)]"
-                      >
-                        Import Repository...
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleReindex();
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--ink-primary)]"
-                      >
-                        Rebuild AST Index
-                      </button>
-                      <div className="my-1 border-t border-[var(--border-hairline)]" />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setOpenMenu(null);
-                          handleLogout();
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--status-danger)]"
-                      >
-                        Sign Out ({firebaseUser.email})
-                      </button>
-                    </>
-                  )}
+                  {menu.label}
+                </button>
 
-                  {menu.id === 'view' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCommandPaletteOpen(true);
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
-                      >
-                        <span>Command Palette</span>
-                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+K</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setExplorerOpen((v) => !v);
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
-                      >
-                        <span>Toggle Explorer</span>
-                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+B</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setBottomPanelCollapsed((v) => !v);
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
-                      >
-                        <span>Toggle Workbench Panel</span>
-                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+J</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRightPanelOpen((v) => !v);
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                      >
-                        Toggle Tasks Panel
-                      </button>
-                      <div className="my-1 border-t border-[var(--border-hairline)]" />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          handleThemeChange(theme === 'dark' ? 'light' : 'dark');
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                      >
-                        Switch to {theme === 'dark' ? 'Windows Light' : 'Windows Dark'} Theme
-                      </button>
-                    </>
-                  )}
+                {openMenu === menu.id && (
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute left-0 top-9 w-60 rounded-xl border border-[var(--border-strong)] apple-popover p-1.5 z-50 text-xs"
+                  >
+                    {menu.id === 'file' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setImportModalOpen(true);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white text-[var(--ink-primary)] transition-colors"
+                        >
+                          Import Repository...
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleReindex();
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white text-[var(--ink-primary)] transition-colors"
+                        >
+                          Rebuild AST Index
+                        </button>
+                        <div className="my-1.5 border-t border-[var(--border-hairline)]" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenu(null);
+                            handleLogout();
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--status-danger)] hover:text-white text-[var(--status-danger)] transition-colors truncate"
+                        >
+                          Sign Out ({firebaseUser.email})
+                        </button>
+                      </>
+                    )}
 
-                  {menu.id === 'extensions' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreen('extensions');
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                      >
-                        Open Extensions Marketplace
-                      </button>
-                      <button
-                        type="button"
-                        onClick={async () => {
-                          const res = await devmindApi.getExtensionsHost(activeProject?.id);
-                          setExtensionHost(res.host);
-                          setOpenMenu(null);
-                          showToast('Refreshed Extension Host.');
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                      >
-                        Refresh Extension Host
-                      </button>
-                      {(extensionHost?.activeCommands.length ?? 0) > 0 && (
-                        <>
-                          <div className="my-1 border-t border-[var(--border-hairline)]" />
-                          {extensionHost!.activeCommands.slice(0, 5).map((cmd) => (
-                            <button
-                              key={cmd.id}
-                              type="button"
-                              onClick={() => {
-                                handleExecuteExtensionCommand(cmd.id);
-                                setOpenMenu(null);
-                              }}
-                              className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] truncate"
-                            >
-                              {cmd.title}
-                            </button>
-                          ))}
-                        </>
-                      )}
-                    </>
-                  )}
+                    {menu.id === 'view' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCommandPaletteOpen(true);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white flex items-center justify-between transition-colors"
+                        >
+                          <span>Spotlight Command Palette</span>
+                          <span className="font-mono text-[10px] opacity-75">{shortcutPrefix}K</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExplorerOpen((v) => !v);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white flex items-center justify-between transition-colors"
+                        >
+                          <span>Toggle Sidebar</span>
+                          <span className="font-mono text-[10px] opacity-75">{shortcutPrefix}B</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBottomPanelCollapsed((v) => !v);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white flex items-center justify-between transition-colors"
+                        >
+                          <span>Toggle Console</span>
+                          <span className="font-mono text-[10px] opacity-75">{shortcutPrefix}J</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRightPanelOpen((v) => !v);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
+                        >
+                          Toggle Inspector Panel
+                        </button>
+                        <div className="my-1.5 border-t border-[var(--border-hairline)]" />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            handleThemeChange(theme === 'dark' ? 'light' : 'dark');
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
+                        >
+                          Switch to {theme === 'dark' ? 'Light' : 'Dark'} Appearance
+                        </button>
+                      </>
+                    )}
 
-                  {menu.id === 'help' && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScreen('settings');
-                          setOpenMenu(null);
-                        }}
-                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
-                      >
-                        Windows .exe Packaging & Settings
-                      </button>
-                      <div className="px-3 py-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
-                        Core Engine v{extensionHost?.engineVersion || '2.1.0'}
-                      </div>
-                    </>
-                  )}
-                </div>
-              )}
-            </div>
-          ))}
+                    {menu.id === 'extensions' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScreen('extensions');
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
+                        >
+                          Open Extensions Marketplace
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const res = await devmindApi.getExtensionsHost(activeProject?.id);
+                            setExtensionHost(res.host);
+                            setOpenMenu(null);
+                            showToast('Refreshed Extension Host.');
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
+                        >
+                          Refresh Extension Host
+                        </button>
+                        {(extensionHost?.activeCommands.length ?? 0) > 0 && (
+                          <>
+                            <div className="my-1.5 border-t border-[var(--border-hairline)]" />
+                            {extensionHost!.activeCommands.slice(0, 5).map((cmd) => (
+                              <button
+                                key={cmd.id}
+                                type="button"
+                                onClick={() => {
+                                  handleExecuteExtensionCommand(cmd.id);
+                                  setOpenMenu(null);
+                                }}
+                                className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white truncate transition-colors"
+                              >
+                                {cmd.title}
+                              </button>
+                            ))}
+                          </>
+                        )}
+                      </>
+                    )}
+
+                    {menu.id === 'help' && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScreen('settings');
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
+                        >
+                          Settings & Windows .exe Builder
+                        </button>
+                        <div className="px-2.5 py-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
+                          Core Engine v{extensionHost?.engineVersion || '2.1.0'} · MIT
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* Center: Command Palette Search Trigger */}
+        {/* Center: macOS Spotlight Search Pill */}
         <button
           type="button"
           onClick={() => setCommandPaletteOpen(true)}
-          className="win-no-drag hidden md:flex items-center justify-between gap-3 h-6 w-[280px] lg:w-[340px] px-2.5 rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-xs text-[var(--ink-muted)] transition-colors"
+          className="win-no-drag hidden md:flex items-center justify-between gap-3 h-8 w-[290px] lg:w-[370px] px-3 rounded-lg bg-[var(--surface-hover)] hover:bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-xs text-[var(--ink-secondary)] transition-all"
         >
           <span className="inline-flex items-center gap-2 truncate">
-            <Search className="w-3 h-3 shrink-0" />
-            <span className="truncate">{activeProject?.name || 'Search files, symbols, commands...'}</span>
+            <Search className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
+            <span className="truncate">
+              {activeProject ? `${activeProject.name} — Search workspace...` : 'Search files, symbols, commands...'}
+            </span>
           </span>
-          <span className="font-mono text-[10px] shrink-0">Ctrl+K</span>
+          <span className="font-mono text-[10px] text-[var(--ink-muted)] px-1.5 py-0.5 rounded bg-[var(--surface-canvas)]/70 border border-[var(--border-hairline)] shrink-0">
+            {shortcutPrefix}K
+          </span>
         </button>
 
-        {/* Right: Repo Switcher + Panel Toggles + Google User + Theme + Native Window Controls */}
-        <div className="flex items-center gap-1 win-no-drag">
+        {/* Right: Repository Switcher + Panel Toggles + Theme + Account */}
+        <div className="flex items-center gap-1.5 win-no-drag">
           <select
             aria-label="Active repository"
             value={activeProject?.id || ''}
             onChange={(e) => handleSelectProject(e.target.value)}
-            className="h-6 max-w-[140px] px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            className="h-7 max-w-[150px] px-2.5 text-xs font-medium rounded-lg bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:border-[var(--accent-primary)]"
           >
             {dedupeById(projects).map((proj) => (
               <option key={proj.id} value={proj.id}>
@@ -1122,53 +1190,48 @@ export function App() {
             ))}
           </select>
 
-          <button
-            type="button"
-            onClick={() => setExplorerOpen((v) => !v)}
-            title="Toggle Explorer (Ctrl+B)"
-            className={`p-1 rounded-[3px] ${
-              explorerOpen ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
-            } hover:bg-[var(--surface-hover)]`}
-          >
-            <PanelLeft className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-0.5 pl-1 border-l border-[var(--border-hairline)]">
+            <button
+              type="button"
+              onClick={() => setBottomPanelCollapsed((v) => !v)}
+              title={`Toggle Console (${shortcutPrefix}J)`}
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                !bottomPanelCollapsed
+                  ? 'bg-[var(--surface-hover)] text-[var(--ink-primary)]'
+                  : 'text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+              }`}
+            >
+              <PanelBottom className="w-4 h-4" />
+            </button>
 
-          <button
-            type="button"
-            onClick={() => setBottomPanelCollapsed((v) => !v)}
-            title="Toggle Bottom Panel (Ctrl+J)"
-            className={`p-1 rounded-[3px] ${
-              !bottomPanelCollapsed ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
-            } hover:bg-[var(--surface-hover)]`}
-          >
-            <PanelBottom className="w-3.5 h-3.5" />
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setRightPanelOpen((v) => !v)}
-            title="Toggle Tasks Panel"
-            className={`p-1 rounded-[3px] ${
-              rightPanelOpen ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
-            } hover:bg-[var(--surface-hover)]`}
-          >
-            <PanelRight className="w-3.5 h-3.5" />
-          </button>
+            <button
+              type="button"
+              onClick={() => setRightPanelOpen((v) => !v)}
+              title="Toggle Inspector Panel"
+              className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${
+                rightPanelOpen
+                  ? 'bg-[var(--surface-hover)] text-[var(--ink-primary)]'
+                  : 'text-[var(--ink-muted)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+              }`}
+            >
+              <PanelRight className="w-4 h-4" />
+            </button>
+          </div>
 
           <PWAInstallButton />
 
           <button
             type="button"
             onClick={() => handleThemeChange(theme === 'dark' ? 'light' : 'dark')}
-            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
-            className="p-1 rounded-[3px] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} appearance`}
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
           >
-            {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Authenticated Google User Identity */}
+          {/* Authenticated User Avatar */}
           <div
-            className="hidden sm:flex items-center gap-1.5 pl-1.5 pr-1 text-[11px] text-[var(--ink-secondary)]"
+            className="hidden sm:flex items-center pl-1"
             title={`Signed in via Google: ${firebaseUser.email || firebaseUser.displayName}`}
           >
             {firebaseUser.photoURL ? (
@@ -1176,10 +1239,10 @@ export function App() {
                 src={firebaseUser.photoURL}
                 alt={firebaseUser.displayName || 'User'}
                 referrerPolicy="no-referrer"
-                className="w-5 h-5 rounded-full border border-[var(--border-hairline)]"
+                className="w-6 h-6 rounded-full border border-[var(--border-hairline)]"
               />
             ) : (
-              <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-[10px] font-semibold">
+              <span className="w-6 h-6 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-[11px] font-semibold">
                 {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
               </span>
             )}
@@ -1189,217 +1252,212 @@ export function App() {
             type="button"
             onClick={handleLogout}
             title="Sign Out"
-            className="p-1 rounded-[3px] text-[var(--ink-secondary)] hover:text-[var(--status-danger)] hover:bg-[var(--surface-hover)]"
+            className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--ink-secondary)] hover:text-[var(--status-danger)] hover:bg-[var(--surface-hover)] transition-colors"
           >
             <LogOut className="w-3.5 h-3.5" />
           </button>
-
-          {/* Native Windows Caption Buttons */}
-          <div className="ml-1 pl-1 border-l border-[var(--border-hairline)] flex items-center">
-            {window.devmindDesktop && (
-              <button
-                type="button"
-                onClick={() => window.devmindDesktop?.minimize()}
-                title="Minimize"
-                className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
-              >
-                <Minus className="w-3.5 h-3.5" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleToggleMaximize}
-              title={isMaximized ? 'Restore' : 'Maximize'}
-              className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
-            >
-              {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
-            </button>
-            {window.devmindDesktop && (
-              <button
-                type="button"
-                onClick={() => window.devmindDesktop?.close()}
-                title="Close"
-                className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[#c42b1c] hover:text-white"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            )}
-          </div>
         </div>
       </header>
 
-      {/* Main Workbench Area */}
+      {/* Main Apple Desktop Split View */}
       <div className="flex-1 flex min-h-0 overflow-hidden select-text">
-        {/* Left VS Code-Style Activity Rail (48px) */}
-        <nav
-          aria-label="Primary workbench navigation"
-          className="w-12 shrink-0 bg-[var(--surface-chrome)] border-r border-[var(--border-hairline)] flex flex-col items-center justify-between py-1.5 select-none"
-        >
-          <div className="flex flex-col items-center gap-1 w-full">
-            {navItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = screen === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => {
-                    if (item.id === 'explorer' && screen === 'explorer') {
-                      setExplorerOpen((v) => !v);
-                    } else {
-                      setScreen(item.id);
-                    }
-                  }}
-                  title={item.label}
-                  className={`relative w-full h-10 flex items-center justify-center transition-colors ${
-                    isActive
-                      ? 'text-[var(--ink-primary)] bg-[var(--surface-active)]'
-                      : 'text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]'
-                  }`}
-                >
-                  {isActive && (
-                    <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] bg-[var(--accent-primary)]" />
-                  )}
-                  <Icon className="w-[18px] h-[18px]" />
-                  {item.badge !== undefined && item.badge > 0 && (
-                    <span className="absolute top-1 right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--accent-primary)] text-[var(--accent-ink)] text-[9px] font-mono font-semibold flex items-center justify-center">
-                      {item.badge > 9 ? '9+' : item.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setScreen('settings')}
-            title="Settings & Windows Runtime"
-            className={`relative w-full h-10 flex items-center justify-center transition-colors ${
-              screen === 'settings'
-                ? 'text-[var(--ink-primary)] bg-[var(--surface-active)]'
-                : 'text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]'
-            }`}
-          >
-            {screen === 'settings' && (
-              <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] bg-[var(--accent-primary)]" />
-            )}
-            <Settings className="w-[18px] h-[18px]" />
-          </button>
-        </nav>
-
-        {/* Collapsible File Explorer Sidebar (visible in Code Editor view) */}
-        {screen === 'explorer' && explorerOpen && (
-          <aside className="w-[240px] shrink-0 bg-[var(--surface-sidebar)] border-r border-[var(--border-hairline)] flex flex-col overflow-hidden">
-            <div className="h-9 px-3 border-b border-[var(--border-hairline)] flex items-center justify-between">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-secondary)]">
-                Explorer
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={handleReindex}
-                  title="Rebuild AST index"
-                  className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setImportModalOpen(true)}
-                  title="Import repository"
-                  className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
-                >
-                  <FolderGit2 className="w-3.5 h-3.5" />
-                </button>
+        {/* Unified macOS Source List Sidebar (244px, collapsible) */}
+        {explorerOpen && (
+          <aside className="w-[244px] shrink-0 bg-[var(--surface-sidebar)] border-r border-[var(--border-hairline)] flex flex-col overflow-hidden select-none">
+            {/* Grouped Navigation */}
+            <nav aria-label="Primary workspace navigation" className="p-2.5 space-y-3.5 shrink-0">
+              <div className="space-y-0.5">
+                <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-muted)]">
+                  Workspace
+                </div>
+                {workspaceNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = screen === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setScreen(item.id)}
+                      className={`w-full h-8 px-2.5 rounded-lg flex items-center justify-between gap-2 text-[12.5px] transition-colors ${
+                        isActive
+                          ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)] font-semibold'
+                          : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-medium'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2.5 truncate">
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="font-mono text-[11px] tabular-nums opacity-80">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-            </div>
 
-            <div className="px-3 py-2 border-b border-[var(--border-hairline)] bg-[var(--surface-subtle)]">
-              <div className="text-xs font-semibold text-[var(--ink-primary)] truncate">
-                {activeProject?.name || 'Workspace'}
+              <div className="space-y-0.5">
+                <div className="px-2.5 pb-1 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-muted)]">
+                  Intelligence
+                </div>
+                {intelligenceNavItems.map((item) => {
+                  const Icon = item.icon;
+                  const isActive = screen === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setScreen(item.id)}
+                      className={`w-full h-8 px-2.5 rounded-lg flex items-center justify-between gap-2 text-[12.5px] transition-colors ${
+                        isActive
+                          ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)] font-semibold'
+                          : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-medium'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2.5 truncate">
+                        <Icon className="w-4 h-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                      </span>
+                      {item.badge !== undefined && item.badge > 0 && (
+                        <span className="font-mono text-[11px] tabular-nums opacity-80">
+                          {item.badge}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
-              <div className="text-[10px] font-mono text-[var(--ink-muted)] truncate mt-0.5">
-                {activeProject?.localPath}
-              </div>
-            </div>
+            </nav>
 
-            <div className="flex-1 overflow-y-auto py-1">
-              {activeProject?.files.map((f) => {
-                const isSelected = activeFile?.path === f.path;
-                const fileIssueCount =
-                  securityFindings.filter((s) => s.filePath === f.path && s.status === 'open').length +
-                  (extensionHost?.diagnostics.filter((d) => d.filePath === f.path).length ?? 0);
-
-                const isPendingFile =
-                  Boolean(activeProject && pendingSyncFiles.has(`${activeProject.id}:${f.path}`)) ||
-                  f.syncStatus === 'pending-sync';
-                return (
+            {/* Integrated Project Explorer Tree */}
+            <div className="flex-1 min-h-0 flex flex-col border-t border-[var(--border-hairline)]">
+              <div className="px-3.5 py-2 flex items-center justify-between">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-muted)] truncate">
+                  {activeProject?.name || 'Files'}
+                </span>
+                <div className="flex items-center gap-0.5">
                   <button
-                    key={f.path}
                     type="button"
-                    onClick={() => {
-                      setActiveFilePath(f.path);
-                      setHighlightLine(null);
-                      setPendingDiff(null);
-                    }}
-                    className={`w-full px-3 py-1.5 text-left flex items-center justify-between gap-2 text-xs transition-colors ${
-                      isSelected
-                        ? 'bg-[var(--surface-active)] text-[var(--ink-primary)] font-medium'
-                        : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
-                    }`}
+                    onClick={handleReindex}
+                    title="Rebuild AST index"
+                    className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
                   >
-                    <span className="inline-flex items-center gap-2 min-w-0">
-                      <FileCode2 className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
-                      <span className="truncate font-mono text-[11px]">{f.path}</span>
-                    </span>
-                    <span className="flex items-center gap-1 shrink-0 font-mono text-[10px]">
-                      {isPendingFile && (
-                        <span
-                          className="px-1 py-0.5 rounded-[2px] bg-[var(--status-warning)]/15 text-[var(--status-warning)] text-[9px] font-medium"
-                          title="Saved locally in IndexedDB — pending sync when online"
-                        >
-                          pending-sync
-                        </span>
-                      )}
-                      {f.gitStatus === 'modified' && !isPendingFile && (
-                        <span className="text-[var(--status-warning)]">M</span>
-                      )}
-                      {fileIssueCount > 0 && (
-                        <span className="text-[var(--status-danger)]">{fileIssueCount}</span>
-                      )}
-                    </span>
+                    <RefreshCw className="w-3 h-3" />
                   </button>
-                );
-              })}
-            </div>
-
-            {/* Outline Symbols Preview */}
-            {activeFile && activeProject && (
-              <div className="border-t border-[var(--border-hairline)] max-h-[160px] flex flex-col">
-                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-muted)] bg-[var(--surface-chrome)]">
-                  Outline Symbols
-                </div>
-                <div className="overflow-y-auto py-1">
-                  {activeProject.symbols
-                    .filter((s) => s.filePath === activeFile.path)
-                    .slice(0, 12)
-                    .map((sym) => (
-                      <button
-                        key={sym.id}
-                        type="button"
-                        onClick={() => setHighlightLine(sym.startLine)}
-                        className="w-full px-3 py-1 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between gap-2 text-[11px]"
-                      >
-                        <span className="font-mono text-[var(--ink-secondary)] truncate">{sym.name}</span>
-                        <span className="font-mono text-[10px] text-[var(--ink-muted)] tabular-nums">
-                          :{sym.startLine}
-                        </span>
-                      </button>
-                    ))}
+                  <button
+                    type="button"
+                    onClick={() => setImportModalOpen(true)}
+                    title="Import repository"
+                    className="w-6 h-6 rounded-md flex items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
+                  >
+                    <FolderGit2 className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
-            )}
+
+              <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-0.5">
+                {activeProject?.files.map((f) => {
+                  const isSelected = activeFile?.path === f.path && screen === 'explorer';
+                  const fileIssueCount =
+                    securityFindings.filter((s) => s.filePath === f.path && s.status === 'open').length +
+                    (extensionHost?.diagnostics.filter((d) => d.filePath === f.path).length ?? 0);
+
+                  const isPendingFile =
+                    Boolean(activeProject && pendingSyncFiles.has(`${activeProject.id}:${f.path}`)) ||
+                    f.syncStatus === 'pending-sync';
+                  return (
+                    <button
+                      key={f.path}
+                      type="button"
+                      onClick={() => {
+                        setActiveFilePath(f.path);
+                        setHighlightLine(null);
+                        setPendingDiff(null);
+                        setScreen('explorer');
+                      }}
+                      className={`w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between gap-2 text-xs transition-colors ${
+                        isSelected
+                          ? 'bg-[var(--surface-elevated)] text-[var(--ink-primary)] font-medium shadow-xs'
+                          : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                      }`}
+                    >
+                      <span className="inline-flex items-center gap-2 min-w-0">
+                        <FileCode2
+                          className={`w-3.5 h-3.5 shrink-0 ${
+                            isSelected ? 'text-[var(--accent-primary)]' : 'text-[var(--ink-muted)]'
+                          }`}
+                        />
+                        <span className="truncate font-mono text-[11px]">{f.path}</span>
+                      </span>
+                      <span className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
+                        {isPendingFile && (
+                          <span
+                            className="px-1.5 py-0.5 rounded-md bg-[var(--status-warning)]/15 text-[var(--status-warning)] text-[9px] font-medium"
+                            title="Saved locally in IndexedDB — pending sync when online"
+                          >
+                            pending-sync
+                          </span>
+                        )}
+                        {f.gitStatus === 'modified' && !isPendingFile && (
+                          <span className="text-[var(--status-warning)]">M</span>
+                        )}
+                        {fileIssueCount > 0 && (
+                          <span className="text-[var(--status-danger)] tabular-nums">{fileIssueCount}</span>
+                        )}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Compact Outline Symbols */}
+              {screen === 'explorer' && activeFile && activeProject && (
+                <div className="border-t border-[var(--border-hairline)] max-h-[140px] flex flex-col">
+                  <div className="px-3.5 py-1.5 text-[10px] font-semibold uppercase tracking-[0.07em] text-[var(--ink-muted)]">
+                    Outline
+                  </div>
+                  <div className="overflow-y-auto px-2 pb-1.5 space-y-0.5">
+                    {activeProject.symbols
+                      .filter((s) => s.filePath === activeFile.path)
+                      .slice(0, 10)
+                      .map((sym) => (
+                        <button
+                          key={sym.id}
+                          type="button"
+                          onClick={() => setHighlightLine(sym.startLine)}
+                          className="w-full px-2.5 py-1 rounded-md text-left hover:bg-[var(--surface-hover)] flex items-center justify-between gap-2 text-[11px] transition-colors"
+                        >
+                          <span className="font-mono text-[var(--ink-secondary)] truncate">{sym.name}</span>
+                          <span className="font-mono text-[10px] text-[var(--ink-muted)] tabular-nums">
+                            :{sym.startLine}
+                          </span>
+                        </button>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Pinned Settings Footer */}
+            <div className="p-2 border-t border-[var(--border-hairline)] shrink-0">
+              <button
+                type="button"
+                onClick={() => setScreen('settings')}
+                className={`w-full h-8 px-2.5 rounded-lg flex items-center justify-between gap-2 text-[12.5px] transition-colors ${
+                  screen === 'settings'
+                    ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)] font-semibold'
+                    : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-medium'
+                }`}
+              >
+                <span className="inline-flex items-center gap-2.5">
+                  <Settings className="w-4 h-4 shrink-0" />
+                  <span>Settings</span>
+                </span>
+                <span className="text-[10px] font-mono text-[var(--ink-muted)]">v2.1</span>
+              </button>
+            </div>
           </aside>
         )}
 
@@ -1558,9 +1616,9 @@ export function App() {
           />
         </div>
 
-        {/* Right Engineering Tasks & Repo Query Panel */}
+        {/* Right macOS Inspector Panel */}
         {rightPanelOpen && (
-          <div className="w-[340px] xl:w-[370px] shrink-0 hidden lg:block">
+          <div className="w-[340px] xl:w-[368px] shrink-0 hidden lg:block">
             <AiWorkspacePanel
               session={session}
               activeProjectName={activeProject?.name || 'Workspace'}
@@ -1578,10 +1636,10 @@ export function App() {
         )}
       </div>
 
-      {/* Native Windows Status Bar (24px) with Live Extension & Firestore Status */}
-      <footer className="h-6 bg-[var(--surface-chrome)] border-t border-[var(--border-hairline)] px-2.5 flex items-center justify-between text-[11px] text-[var(--ink-secondary)] shrink-0 select-none">
+      {/* Apple Xcode-Style Minimal Status Strip (28px) */}
+      <footer className="h-7 apple-vibrancy border-t border-[var(--border-hairline)] px-3.5 flex items-center justify-between text-[11px] text-[var(--ink-secondary)] shrink-0 select-none">
         <div className="flex items-center gap-3 min-w-0 overflow-hidden">
-          <span className="inline-flex items-center gap-1 font-mono text-[var(--ink-primary)] shrink-0">
+          <span className="inline-flex items-center gap-1.5 font-mono text-[var(--ink-primary)] shrink-0">
             <GitBranch className="w-3 h-3 text-[var(--accent-primary)]" />
             {activeProject?.defaultBranch || 'main'}
           </span>
@@ -1593,7 +1651,7 @@ export function App() {
               setBottomPanelCollapsed(false);
             }}
             className="inline-flex items-center gap-1.5 hover:text-[var(--ink-primary)] font-mono tabular-nums shrink-0"
-            title="Show Problems panel"
+            title="Show Problems console"
           >
             <AlertCircle className="w-3 h-3 text-[var(--status-danger)]" />
             <span>{errorProblemsCount}</span>
@@ -1601,7 +1659,6 @@ export function App() {
             <span>{warningProblemsCount}</span>
           </button>
 
-          {/* Extension Status Bar Items (Left Alignment) */}
           {(extensionHost?.statusBarItems ?? [])
             .filter((item) => item.alignment === 'left')
             .map((item) => (
@@ -1616,7 +1673,7 @@ export function App() {
                     setScreen('extensions');
                   }
                 }}
-                className="hidden sm:inline-flex items-center px-1.5 h-5 rounded-[2px] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-mono truncate max-w-[170px]"
+                className="hidden sm:inline-flex items-center px-2 h-5 rounded-md hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-mono truncate max-w-[170px] transition-colors"
               >
                 {item.text}
               </button>
@@ -1638,7 +1695,7 @@ export function App() {
                     setScreen('extensions');
                   }
                 }}
-                className="hidden xl:inline-flex items-center px-1.5 h-5 rounded-[2px] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
+                className="hidden xl:inline-flex items-center px-2 h-5 rounded-md hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] transition-colors"
               >
                 {item.text}
               </button>
@@ -1651,7 +1708,7 @@ export function App() {
           )}
 
           <span
-            className="hidden lg:inline-flex items-center gap-1 text-[var(--ink-muted)]"
+            className="hidden lg:inline-flex items-center gap-1.5 text-[var(--ink-muted)]"
             title={`Firestore synced for ${firebaseUser.email}: ${cloudProjects.length} projects, ${cloudTasks.length} tasks, ${cloudExtensions.length} extensions`}
           >
             <Cloud className="w-3 h-3 text-[var(--accent-primary)]" />
@@ -1669,32 +1726,32 @@ export function App() {
           </button>
 
           <span className="hidden sm:inline text-[var(--ink-muted)]">
-            {sseConnected ? 'Sync Active' : 'Reconnecting'}
+            {sseConnected ? 'Synced' : 'Offline'}
           </span>
         </div>
       </footer>
 
-      {/* Unobtrusive Desktop Toast Notification */}
+      {/* Apple Frosted Toast Notification */}
       {toast && (
         <div
-          className={`fixed bottom-9 right-4 z-50 px-3.5 py-2 rounded-[4px] border shadow-lg text-xs flex items-center gap-2.5 max-w-md ${
+          className={`fixed bottom-10 right-5 z-50 px-4 py-2.5 rounded-xl border apple-popover text-xs font-medium flex items-center gap-2.5 max-w-md ${
             toast.tone === 'error'
-              ? 'bg-[var(--surface-elevated)] border-[var(--status-danger)] text-[var(--status-danger)]'
-              : 'bg-[var(--surface-elevated)] border-[var(--border-strong)] text-[var(--ink-primary)]'
+              ? 'border-[var(--status-danger)]/50 text-[var(--status-danger)]'
+              : 'border-[var(--border-strong)] text-[var(--ink-primary)]'
           }`}
         >
           <span>{toast.text}</span>
           <button
             type="button"
             onClick={() => setToast(null)}
-            className="text-[var(--ink-muted)] hover:text-[var(--ink-primary)]"
+            className="w-5 h-5 rounded-full flex items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
           >
-            <X className="w-3.5 h-3.5" />
+            <X className="w-3 h-3" />
           </button>
         </div>
       )}
 
-      {/* Command Palette & Import Repository Modals */}
+      {/* Spotlight Command Palette & Import Repository Modals */}
       <CommandPalette
         open={commandPaletteOpen}
         project={activeProject}

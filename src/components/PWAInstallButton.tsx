@@ -15,10 +15,10 @@ export const PWAInstallButton: React.FC = () => {
       <button
         type="button"
         onClick={() => void install()}
-        className="h-6 px-2 text-[11px] font-medium rounded-[3px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors"
+        className="h-7 px-2.5 text-[11px] font-medium rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
         title="Install DevMind Studio for offline desktop access"
       >
-        <Download className="w-3 h-3 text-[var(--accent-primary)]" />
+        <Download className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
         <span className="hidden md:inline">Install App</span>
       </button>
     );
@@ -30,15 +30,15 @@ export const PWAInstallButton: React.FC = () => {
         <button
           type="button"
           onClick={() => setShowIOSGuide(true)}
-          className="h-6 px-2 text-[11px] font-medium rounded-[3px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors"
+          className="h-7 px-2.5 text-[11px] font-medium rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
         >
-          <Download className="w-3 h-3 text-[var(--accent-primary)]" />
+          <Download className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
           <span>Install</span>
         </button>
 
         {showIOSGuide && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
-            <div className="w-full max-w-sm rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] p-5 shadow-xl space-y-3">
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+            <div className="w-full max-w-sm apple-sheet p-5 space-y-3.5">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-[var(--ink-primary)]">
                   Install DevMind Studio
@@ -46,7 +46,7 @@ export const PWAInstallButton: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowIOSGuide(false)}
-                  className="w-6 h-6 flex items-center justify-center rounded-[3px] text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+                  className="w-7 h-7 flex items-center justify-center rounded-full text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
                 >
                   <X className="w-3.5 h-3.5" />
                 </button>
@@ -59,9 +59,9 @@ export const PWAInstallButton: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowIOSGuide(false)}
-                className="w-full h-8 rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
+                className="w-full h-9 rounded-lg bg-[var(--accent-primary)] text-[var(--accent-ink)] text-xs font-medium hover:bg-[var(--accent-hover)] transition-colors"
               >
-                Got it
+                Done
               </button>
             </div>
           </div>

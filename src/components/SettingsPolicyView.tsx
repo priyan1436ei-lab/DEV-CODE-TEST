@@ -39,10 +39,12 @@ echo   DevMind Studio - Standalone Windows x64 .exe Builder
 echo ============================================================
 call npm install
 if errorlevel 1 exit /b 1
+call npm install -D electron electron-builder
+if errorlevel 1 exit /b 1
 call npm run build:win
 if errorlevel 1 exit /b 1
 echo.
-echo [DONE] Built NSIS Installer and Portable .exe in release\\
+echo [DONE] Built NSIS Installer and Portable .exe in dist-electron\\
 pause
 `;
 
@@ -146,64 +148,58 @@ export const SettingsPolicyView: React.FC<SettingsPolicyViewProps> = ({
     <div className="h-full overflow-y-auto bg-[var(--surface-canvas)] p-6">
       <div className="max-w-4xl space-y-6">
         <div className="border-b border-[var(--border-hairline)] pb-4">
-          <h1 className="text-lg font-semibold text-[var(--ink-primary)] tracking-tight">
-            Settings, Policies & Windows Runtime
+          <h1 className="text-xl font-semibold text-[var(--ink-primary)] tracking-[-0.02em]">
+            Settings, Policies & Desktop Runtime
           </h1>
           <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
-            Configure desktop appearance, Windows `.exe` packaging, model endpoints, permission guardrails, and spend caps.
+            Configure macOS Sequoia appearance, standalone Windows `.exe` packaging, model endpoints, permission guardrails, and spend caps.
           </p>
         </div>
 
-        {/* Desktop Appearance & Windows Runtime */}
+        {/* Desktop Appearance & Standalone Windows Runtime */}
         <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] space-y-3">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)]">
-              Desktop Theme
+          <div className="p-4 apple-card space-y-3">
+            <h2 className="text-xs font-semibold text-[var(--ink-primary)]">
+              Appearance
             </h2>
             <p className="text-xs text-[var(--ink-secondary)]">
-              Switch between Windows 11 Fluent Dark and Ceramic Light surfaces.
+              Switch between macOS Sequoia Obsidian Dark and Porcelain Light surfaces.
             </p>
-            <div className="flex items-center gap-2">
+            <div className="apple-segmented w-full grid grid-cols-2">
               <button
                 type="button"
+                data-active={theme === 'dark'}
                 onClick={() => onThemeChange('dark')}
-                className={`flex-1 h-9 px-3 text-xs font-medium rounded-[4px] border inline-flex items-center justify-center gap-2 transition-colors ${
-                  theme === 'dark'
-                    ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
-                    : 'border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-                }`}
+                className="apple-segmented-item h-8 px-3 text-xs font-medium inline-flex items-center justify-center gap-2 text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]"
               >
                 <Moon className="w-3.5 h-3.5" />
-                Windows Dark
+                Dark
               </button>
               <button
                 type="button"
+                data-active={theme === 'light'}
                 onClick={() => onThemeChange('light')}
-                className={`flex-1 h-9 px-3 text-xs font-medium rounded-[4px] border inline-flex items-center justify-center gap-2 transition-colors ${
-                  theme === 'light'
-                    ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
-                    : 'border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-                }`}
+                className="apple-segmented-item h-8 px-3 text-xs font-medium inline-flex items-center justify-center gap-2 text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]"
               >
                 <Sun className="w-3.5 h-3.5" />
-                Windows Light
+                Light
               </button>
             </div>
           </div>
 
-          <div className="p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] space-y-3">
+          <div className="p-4 apple-card space-y-3">
             <div className="flex items-center justify-between">
-              <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)] inline-flex items-center gap-1.5">
+              <h2 className="text-xs font-semibold text-[var(--ink-primary)] inline-flex items-center gap-1.5">
                 <Monitor className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
-                Windows Standalone .exe
+                Standalone Windows .exe
               </h2>
               <span className="text-[11px] font-mono text-[var(--ink-muted)]">
                 {systemInfo ? `Electron ${systemInfo.electronVersion}` : 'NSIS + Portable x64'}
               </span>
             </div>
             <p className="text-xs text-[var(--ink-secondary)]">
-              Build a standalone Windows installer and portable executable via{' '}
-              <code className="font-mono text-[var(--ink-primary)]">npm run build:win</code> (embedded Node runtime, 512MB V8 heap cap, zero external runtime dependencies).
+              Builds a self-contained Windows installer & portable `.exe` via{' '}
+              <code className="font-mono text-[var(--ink-primary)]">npm run build:win</code> (in-process bundled Express server, zero Node.js/tsx dependency).
             </p>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-mono text-[var(--ink-muted)]">
@@ -214,7 +210,7 @@ export const SettingsPolicyView: React.FC<SettingsPolicyViewProps> = ({
               <button
                 type="button"
                 onClick={handleDownloadBuildScript}
-                className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-canvas)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5"
+                className="h-8 px-3 text-xs font-medium rounded-lg border border-[var(--border-strong)] bg-[var(--surface-canvas)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors"
               >
                 <Download className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
                 Download .bat Builder
@@ -226,7 +222,7 @@ export const SettingsPolicyView: React.FC<SettingsPolicyViewProps> = ({
         {/* BYOK LLM Provider Configuration */}
         <form
           onSubmit={handleSaveLlm}
-          className="p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] space-y-4"
+          className="p-4 apple-card space-y-4"
         >
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)] inline-flex items-center gap-1.5">

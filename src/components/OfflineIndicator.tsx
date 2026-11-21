@@ -17,10 +17,10 @@ export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({ syncing = fa
   return (
     <div
       role="status"
-      className={`fixed bottom-8 left-14 z-50 flex items-center gap-2.5 rounded-[4px] border px-3 py-1.5 text-xs font-medium shadow-md ${
+      className={`fixed bottom-10 left-5 z-50 flex items-center gap-2.5 rounded-xl border px-3.5 py-2 text-xs font-medium apple-popover ${
         !isOnline
-          ? 'border-[var(--status-warning)]/50 bg-[var(--surface-elevated)] text-[var(--ink-primary)]'
-          : 'border-[var(--accent-primary)]/50 bg-[var(--surface-elevated)] text-[var(--ink-primary)]'
+          ? 'border-[var(--status-warning)]/40 text-[var(--ink-primary)]'
+          : 'border-[var(--accent-primary)]/40 text-[var(--ink-primary)]'
       }`}
     >
       <CloudOff
@@ -31,8 +31,8 @@ export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({ syncing = fa
       <span>
         {!isOnline
           ? pendingSyncCount > 0
-            ? `Offline Mode (IndexedDB) · ${pendingSyncCount} local edit${pendingSyncCount === 1 ? '' : 's'} queued`
-            : 'Offline Mode — Editing & search running locally via IndexedDB & Cache API'
+            ? `Offline · ${pendingSyncCount} local edit${pendingSyncCount === 1 ? '' : 's'} queued in IndexedDB`
+            : 'Offline Mode — Running locally via IndexedDB & Cache API'
           : `${pendingSyncCount} offline change${pendingSyncCount === 1 ? '' : 's'} ready to sync`}
       </span>
       {isOnline && pendingSyncCount > 0 && onSyncNow && (
@@ -40,7 +40,7 @@ export const OfflineIndicator: React.FC<OfflineIndicatorProps> = ({ syncing = fa
           type="button"
           disabled={syncing}
           onClick={onSyncNow}
-          className="h-6 px-2 rounded-[3px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-50 inline-flex items-center gap-1 text-[11px] font-medium transition-colors"
+          className="h-6 px-2.5 rounded-lg bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-50 inline-flex items-center gap-1 text-[11px] font-medium transition-colors"
         >
           <RefreshCw className={`w-3 h-3 ${syncing ? 'animate-spin' : ''}`} />
           {syncing ? 'Syncing...' : 'Sync Now'}

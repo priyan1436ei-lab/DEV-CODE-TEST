@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
+import type http from 'node:http';
 import path from 'node:path';
-import { createServer as createViteServer } from 'vite';
 import { store, type RealtimeSyncEvent } from './server/agentOrchestrator.ts';
 import { LLM_PROVIDER_PRESETS } from './server/modelGateway.ts';
 import { hybridSearchRepository } from './server/repoBrain.ts';
@@ -29,9 +29,23 @@ function getSessionLlmConfig(req: express.Request): UserLlmConfig {
   return session.llm;
 }
 
-async function startServer() {
+export interface StartServerOptions {
+  port?: number;
+  host?: string;
+  distDir?: string;
+  dataDir?: string;
+}
+
+export async function startServer(
+  options?: StartServerOptions
+): Promise<{ server: http.Server; port: number }> {
+  if (options?.dataDir) {
+    store.reconfigureDataDir(options.dataDir);
+  }
+
   const app = express();
-  const PORT = Number(process.env.PORT || 3000);
+  const PORT = Number(options?.port ?? process.env.PORT ?? 3000);
+  const HOST = options?.host || process.env.HOST || '0.0.0.0';
 
   app.use(express.json({ limit: '10mb' }));
 
@@ -526,22 +540,39 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
+    const vitePkg = 'vite';
+    const viteMod = (await import(/* @vite-ignore */ vitePkg)) as typeof import('vite');
+    const vite = await viteMod.createServer({
       server: { middlewareMode: true, hmr: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(process.cwd(), 'dist');
+    const distDir = options?.distDir
+      ? path.resolve(options.distDir)
+      : process.env.DEVMIND_DIST_DIR
+      ? path.resolve(process.env.DEVMIND_DIST_DIR)
+      : path.resolve(process.cwd(), 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`DevMind Studio listening on http://0.0.0.0:${PORT}`);
+  return new Promise((resolve, reject) => {
+    const server = app.listen(PORT, HOST, () => {
+      const address = server.address();
+      const boundPort = typeof address === 'object' && address ? address.port : PORT;
+      console.log(`DevMind Studio listening on http://${HOST}:${boundPort}`);
+      resolve({ server, port: boundPort });
+    });
+    server.on('error', reject);
   });
 }
 
-startServer();
+if (process.env.DEVMIND_EMBEDDED !== '1') {
+  startServer().catch((err) => {
+    console.error('DevMind Studio server failed to start:', err);
+    process.exit(1);
+  });
+}

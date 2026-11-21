@@ -75,7 +75,16 @@ export class DevMindStore {
   public debugAnalyses = new Map<string, DebugAnalysis[]>();
   public policies: PermissionPolicyRule[] = structuredClone(DEFAULT_PERMISSION_POLICIES);
   public auditLogs: AuditLogEntry[] = [];
-  private stateFilePath = path.resolve(process.cwd(), 'data', 'devmind-state.json');
+  private stateFilePath = DevMindStore.resolveStateFilePath();
+
+  private static resolveStateFilePath(customDataDir?: string): string {
+    const baseDir = customDataDir
+      ? path.resolve(customDataDir)
+      : process.env.DEVMIND_DATA_DIR
+      ? path.resolve(process.env.DEVMIND_DATA_DIR)
+      : path.resolve(process.cwd(), 'data');
+    return path.join(baseDir, 'devmind-state.json');
+  }
 
   constructor() {
     this.events.setMaxListeners(100);
@@ -86,6 +95,24 @@ export class DevMindStore {
     const firstProj = this.listProjects()[0];
     if (firstProj) {
       this.extensions.dispatchWorkspaceEvent('onStartupFinished', firstProj);
+    }
+  }
+
+  public reconfigureDataDir(dataDir: string): void {
+    const nextPath = DevMindStore.resolveStateFilePath(dataDir);
+    if (nextPath === this.stateFilePath) return;
+    this.stateFilePath = nextPath;
+    if (fs.existsSync(this.stateFilePath)) {
+      this.projects.clear();
+      this.tasks.clear();
+      this.chatHistories.clear();
+      this.debugAnalyses.clear();
+      if (!this.loadPersistedState()) {
+        this.seedInitialProjects();
+        this.persistState();
+      }
+    } else {
+      this.persistState();
     }
   }
 

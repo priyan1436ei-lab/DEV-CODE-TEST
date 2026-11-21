@@ -100,20 +100,17 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
 
   return (
     <div className="border-t border-[var(--border-hairline)] bg-[var(--surface-elevated)] flex flex-col shrink-0">
-      {/* Workbench Panel Header Bar */}
-      <div className="h-8 px-3 flex items-center justify-between border-b border-[var(--border-hairline)] bg-[var(--surface-chrome)] select-none">
-        <div className="flex items-center gap-4">
+      {/* Apple Xcode-style Segmented Console Header */}
+      <div className="h-10 px-3 flex items-center justify-between border-b border-[var(--border-hairline)] apple-vibrancy select-none">
+        <div className="apple-segmented">
           <button
             type="button"
+            data-active={activeTab === 'problems' && !collapsed}
             onClick={() => {
               onTabChange('problems');
               if (collapsed) onToggleCollapse();
             }}
-            className={`h-8 text-[11px] font-medium uppercase tracking-wide border-b-2 inline-flex items-center gap-1.5 transition-colors ${
-              activeTab === 'problems' && !collapsed
-                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
-                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-            }`}
+            className="apple-segmented-item h-6 px-2.5 text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] inline-flex items-center gap-1.5"
           >
             <ShieldAlert className="w-3.5 h-3.5" />
             Problems
@@ -124,15 +121,12 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
 
           <button
             type="button"
+            data-active={activeTab === 'extensions' && !collapsed}
             onClick={() => {
               onTabChange('extensions');
               if (collapsed) onToggleCollapse();
             }}
-            className={`h-8 text-[11px] font-medium uppercase tracking-wide border-b-2 inline-flex items-center gap-1.5 transition-colors ${
-              activeTab === 'extensions' && !collapsed
-                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
-                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-            }`}
+            className="apple-segmented-item h-6 px-2.5 text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] inline-flex items-center gap-1.5"
           >
             <Terminal className="w-3.5 h-3.5" />
             Extension Host
@@ -143,15 +137,12 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
 
           <button
             type="button"
+            data-active={activeTab === 'audit' && !collapsed}
             onClick={() => {
               onTabChange('audit');
               if (collapsed) onToggleCollapse();
             }}
-            className={`h-8 text-[11px] font-medium uppercase tracking-wide border-b-2 inline-flex items-center gap-1.5 transition-colors ${
-              activeTab === 'audit' && !collapsed
-                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
-                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
-            }`}
+            className="apple-segmented-item h-6 px-2.5 text-[11px] font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] inline-flex items-center gap-1.5"
           >
             <ScrollText className="w-3.5 h-3.5" />
             Audit Log
@@ -174,7 +165,7 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
               <select
                 value={severityFilter}
                 onChange={(e) => setSeverityFilter(e.target.value as 'all' | 'error' | 'warning' | 'info')}
-                className="h-5 px-1.5 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none"
+                className="h-6 px-2 text-[11px] rounded-md bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none"
               >
                 <option value="all">All</option>
                 <option value="error">Errors</option>
@@ -187,8 +178,8 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
           <button
             type="button"
             onClick={onToggleCollapse}
-            title={collapsed ? 'Expand panel' : 'Collapse panel'}
-            className="p-1 rounded text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+            title={collapsed ? 'Expand console' : 'Collapse console'}
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
           >
             {collapsed ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
@@ -197,7 +188,7 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
 
       {/* Body */}
       {!collapsed && (
-        <div className="h-[196px] overflow-y-auto bg-[var(--surface-canvas)]">
+        <div className="h-[192px] overflow-y-auto bg-[var(--surface-canvas)]">
           {activeTab === 'problems' && (
             combinedProblems.length === 0 ? (
               <div className="h-full flex items-center justify-center text-xs text-[var(--ink-muted)]">
@@ -210,7 +201,7 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
                     key={problem.id}
                     type="button"
                     onClick={() => onOpenFileLine(problem.filePath, problem.line)}
-                    className="w-full px-3.5 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between gap-4 text-xs transition-colors"
+                    className="w-full px-4 py-2 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between gap-4 text-xs transition-colors"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {problem.severity === 'error' ? (
@@ -242,7 +233,7 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
             ) : (
               <div className="divide-y divide-[var(--border-hairline)] font-mono text-xs">
                 {runtimeLogs.map((log) => (
-                  <div key={log.id} className="px-3.5 py-1.5 flex items-center gap-3">
+                  <div key={log.id} className="px-4 py-1.5 flex items-center gap-3">
                     <span className="text-[11px] text-[var(--ink-muted)] tabular-nums shrink-0">
                       {new Date(log.timestamp).toLocaleTimeString()}
                     </span>
@@ -276,7 +267,7 @@ export const BottomWorkbenchPanel: React.FC<BottomWorkbenchPanelProps> = ({
             ) : (
               <div className="divide-y divide-[var(--border-hairline)] font-mono text-xs">
                 {auditLogs.slice(0, 80).map((entry) => (
-                  <div key={entry.id} className="px-3.5 py-1.5 flex items-center justify-between gap-4">
+                  <div key={entry.id} className="px-4 py-1.5 flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3 min-w-0">
                       <span className="text-[11px] text-[var(--ink-muted)] tabular-nums shrink-0">
                         {new Date(entry.timestamp).toLocaleTimeString()}

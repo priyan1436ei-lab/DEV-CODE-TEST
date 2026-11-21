@@ -27,6 +27,11 @@ jobs:
       - name: Build production web & PWA assets
         run: npm run build
 
+      - name: Bundle standalone zero-dependency Electron backend server
+        env:
+          DEVMIND_EMBEDDED: "1"
+        run: npm run build:server && node -e "const m = require('./dist-server/server.cjs'); if (typeof m.startServer !== 'function') process.exit(1);"
+
       - name: Ensure Windows icon resources exist
         run: node scripts/ensure-win-icon.mjs
 

@@ -21,8 +21,10 @@ echo [2/4] Installing Electron and electron-builder...
 call npm install -D electron electron-builder
 if errorlevel 1 goto :error
 
-echo [3/4] Compiling optimized production bundle and verifying Windows icons...
+echo [3/4] Compiling web assets, standalone backend server, and Windows icons...
 call npm run build
+if errorlevel 1 goto :error
+call npm run build:server
 if errorlevel 1 goto :error
 call node scripts/ensure-win-icon.mjs
 if errorlevel 1 goto :error

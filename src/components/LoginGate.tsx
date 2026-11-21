@@ -76,7 +76,6 @@ export const LoginGate: React.FC<LoginGateProps> = ({
       });
   }, []);
 
-  // Hydrate saved Firestore user preferences when cloudProfile arrives from App
   useEffect(() => {
     if (!cloudProfile) return;
     setProvider(cloudProfile.preferredProvider);
@@ -173,132 +172,163 @@ export const LoginGate: React.FC<LoginGateProps> = ({
   };
 
   return (
-    <div className="min-h-screen w-full bg-[var(--surface-chrome)] text-[var(--ink-primary)] flex flex-col">
-      {/* Top Desktop Header Strip */}
-      <header className="h-11 px-5 border-b border-[var(--border-hairline)] bg-[var(--surface-sidebar)] flex items-center justify-between win-drag-region">
-        <div className="flex items-center gap-2.5">
+    <div className="min-h-screen w-full bg-[var(--surface-sidebar)] text-[var(--ink-primary)] flex flex-col">
+      {/* macOS Sequoia Unified Header */}
+      <header className="h-12 px-5 border-b border-[var(--border-hairline)] apple-vibrancy flex items-center justify-between win-drag-region">
+        <div className="flex items-center gap-3 win-no-drag">
+          <div className="flex items-center gap-2 mr-1">
+            <button
+              type="button"
+              onClick={() => window.devmindDesktop?.close()}
+              title="Close"
+              className="w-3 h-3 rounded-full bg-[#FF5F57] border border-black/15 hover:brightness-95 transition"
+              aria-label="Close window"
+            />
+            <button
+              type="button"
+              onClick={() => window.devmindDesktop?.minimize()}
+              title="Minimize"
+              className="w-3 h-3 rounded-full bg-[#FEBC2E] border border-black/15 hover:brightness-95 transition"
+              aria-label="Minimize window"
+            />
+            <button
+              type="button"
+              onClick={() => window.devmindDesktop?.toggleMaximize()}
+              title="Zoom"
+              className="w-3 h-3 rounded-full bg-[#28C840] border border-black/15 hover:brightness-95 transition"
+              aria-label="Toggle maximize window"
+            />
+          </div>
           <img
             src="/icon.png"
             alt="DevMind Studio"
-            className="w-6 h-6 object-contain shrink-0"
+            className="w-6 h-6 rounded-[7px] object-contain shrink-0 shadow-xs"
             draggable={false}
           />
-          <span className="text-xs font-semibold tracking-tight text-[var(--ink-primary)]">
+          <span className="text-[13px] font-semibold tracking-tight text-[var(--ink-primary)]">
             DevMind Studio
           </span>
-          <span className="text-[11px] text-[var(--ink-muted)] font-mono">v2.1.0 · Windows x64</span>
+          <span className="text-[11px] text-[var(--ink-muted)] font-mono">v2.1</span>
         </div>
 
-        <div className="flex items-center gap-3 text-[11px] text-[var(--ink-muted)] win-no-drag">
+        <div className="flex items-center gap-3 text-[11px] text-[var(--ink-secondary)] win-no-drag">
           <PWAInstallButton />
-          <span className="inline-flex items-center gap-1">
+          <span className="inline-flex items-center gap-1.5">
             <Cloud className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
-            Firebase Auth & Firestore
+            Cloud Sync
           </span>
-          <span className="hidden sm:inline-flex items-center gap-1">
+          <span className="hidden sm:inline-flex items-center gap-1.5 text-[var(--ink-muted)]">
             <Monitor className="w-3.5 h-3.5" />
-            Local Desktop Runtime
+            Standalone Desktop
           </span>
         </div>
       </header>
 
-      {/* Main Split Content */}
+      {/* Centered Apple Welcome Sheet */}
       <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-[980px] grid grid-cols-1 lg:grid-cols-12 border border-[var(--border-hairline)] rounded-[6px] bg-[var(--surface-canvas)] overflow-hidden shadow-sm">
-          {/* Left Product Overview Pane */}
-          <div className="lg:col-span-5 p-8 bg-[var(--surface-sidebar)] border-b lg:border-b-0 lg:border-r border-[var(--border-hairline)] flex flex-col justify-between gap-8">
-            <div className="space-y-4">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--accent-primary)]">
-                Desktop Engineering Environment
+        <div className="w-full max-w-[960px] grid grid-cols-1 lg:grid-cols-12 apple-sheet overflow-hidden">
+          {/* Left macOS Welcome Summary */}
+          <div className="lg:col-span-5 p-8 bg-[var(--surface-subtle)] border-b lg:border-b-0 lg:border-r border-[var(--border-hairline)] flex flex-col justify-between gap-8">
+            <div className="space-y-5">
+              <div className="flex items-center gap-3.5">
+                <img
+                  src="/icon.png"
+                  alt="DevMind Studio"
+                  className="w-14 h-14 rounded-[14px] object-contain shadow-md border border-[var(--border-hairline)] bg-[var(--surface-canvas)] p-1"
+                  draggable={false}
+                />
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--accent-primary)]">
+                    DevMind Studio
+                  </div>
+                  <div className="text-sm font-semibold text-[var(--ink-primary)]">
+                    Engineering Workbench
+                  </div>
+                </div>
               </div>
-              <h1 className="text-2xl font-semibold tracking-tight text-[var(--ink-primary)] leading-tight">
-                Sign in with Google to sync your IDE, extensions, and tasks.
-              </h1>
-              <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
-                Your workspace preferences, installed extensions, task priorities, and repository metadata persist securely in Cloud Firestore under your Google identity while model API keys remain strictly local in memory.
-              </p>
 
-              <div className="pt-3 space-y-3 border-t border-[var(--border-hairline)]">
-                <div className="flex items-start gap-2.5">
-                  <Cloud className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--ink-primary)]">
-                      Per-User Cloud Firestore Persistence
-                    </div>
-                    <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      Strict owner-isolated security rules sync your profile, extension states, tasks, and projects across sessions.
-                    </p>
-                  </div>
-                </div>
+              <div className="space-y-2">
+                <h1 className="text-[22px] font-semibold tracking-[-0.025em] text-[var(--ink-primary)] leading-snug">
+                  Sign in to open your workspace.
+                </h1>
+                <p className="text-[12.5px] text-[var(--ink-secondary)] leading-relaxed">
+                  Your repositories, extension host configuration, and task priorities sync privately via Firestore while model API keys remain strictly local in memory.
+                </p>
+              </div>
 
-                <div className="flex items-start gap-2.5">
-                  <Blocks className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--ink-primary)]">
-                      VS Code-Style Extension Host
+              <div className="pt-4 space-y-3.5 border-t border-[var(--border-hairline)]">
+                {[
+                  {
+                    icon: Cloud,
+                    title: 'Private Cloud Persistence',
+                    desc: 'Owner-isolated Firestore rules sync your profile, extensions, and tasks across devices.',
+                  },
+                  {
+                    icon: Blocks,
+                    title: 'Modular Extension Host',
+                    desc: 'Run formatters, linters, and workspace diagnostics with scoped permissions.',
+                  },
+                  {
+                    icon: FolderGit2,
+                    title: 'AST Indexing & Diff Review',
+                    desc: 'Inspect dependency graphs, review unified diffs, and restore rollback snapshots.',
+                  },
+                  {
+                    icon: ShieldCheck,
+                    title: 'Zero-Secret Cloud Design',
+                    desc: 'BYOK provider keys never leave local runtime memory.',
+                  },
+                ].map((feature) => {
+                  const Icon = feature.icon;
+                  return (
+                    <div key={feature.title} className="flex items-start gap-3">
+                      <div className="w-7 h-7 rounded-lg bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center shrink-0 mt-0.5">
+                        <Icon className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <div className="text-xs font-semibold text-[var(--ink-primary)]">
+                          {feature.title}
+                        </div>
+                        <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5 leading-relaxed">
+                          {feature.desc}
+                        </p>
+                      </div>
                     </div>
-                    <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      Install formatters, linters, and diagnostics with strict permission scopes and dependency resolution.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2.5">
-                  <FolderGit2 className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--ink-primary)]">
-                      AST Repository Indexing & Live Sync
-                    </div>
-                    <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      Dependency graph inspection, unified diff review, and one-click rollback snapshots.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-2.5">
-                  <ShieldCheck className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
-                  <div>
-                    <div className="text-xs font-semibold text-[var(--ink-primary)]">
-                      Zero-Secret Cloud Storage
-                    </div>
-                    <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      BYOK LLM API keys are never written to Firestore — they stay strictly in server session memory.
-                    </p>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
             </div>
 
             <div className="pt-4 border-t border-[var(--border-hairline)] text-[11px] text-[var(--ink-muted)] font-mono flex items-center justify-between">
-              <span>Engine Core 2.1.0</span>
-              <span>Win11 Fluent UI</span>
+              <span>Core Engine 2.1.0</span>
+              <span>MIT License</span>
             </div>
           </div>
 
-          {/* Right Sign-In & Provider Configuration Form */}
-          <div className="lg:col-span-7 p-8 space-y-5">
-            {/* Step 1: Google Sign-In Identity */}
+          {/* Right Account & Endpoint Sheet */}
+          <div className="lg:col-span-7 p-8 bg-[var(--surface-elevated)] space-y-6">
+            {/* Step 1: Google Sign-In */}
             <div className="space-y-3">
               <div>
-                <h2 className="text-base font-semibold text-[var(--ink-primary)]">
+                <h2 className="text-[15px] font-semibold tracking-tight text-[var(--ink-primary)]">
                   1. Verify Account with Google
                 </h2>
                 <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
-                  Authenticate via Firebase Auth to unlock your private Firestore workspace data.
+                  Authenticate via Firebase Auth to unlock your synced workspace.
                 </p>
               </div>
 
               {!firebaseAuthReady ? (
-                <div className="h-11 px-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] flex items-center gap-2 text-xs text-[var(--ink-secondary)]">
+                <div className="h-11 px-4 rounded-xl border border-[var(--border-hairline)] bg-[var(--surface-subtle)] flex items-center gap-2.5 text-xs text-[var(--ink-secondary)]">
                   <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-primary)]" />
-                  Checking Firebase authentication state...
+                  Checking authentication state...
                 </div>
               ) : !firebaseUser ? (
                 <button
                   type="button"
                   disabled={signingInGoogle}
                   onClick={handleGoogleSignIn}
-                  className="w-full h-11 px-4 rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover)] text-[var(--ink-primary)] text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors disabled:opacity-50"
+                  className="w-full h-11 px-4 rounded-xl border border-[var(--border-strong)] bg-[var(--surface-canvas)] hover:bg-[var(--surface-hover)] text-[var(--ink-primary)] text-[13px] font-medium flex items-center justify-center gap-2.5 transition-all disabled:opacity-50 shadow-xs"
                 >
                   {signingInGoogle ? (
                     <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-primary)]" />
@@ -322,37 +352,37 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                       />
                     </svg>
                   )}
-                  <span>{signingInGoogle ? 'Opening Google Sign-In...' : 'Sign in with Google'}</span>
+                  <span>{signingInGoogle ? 'Opening Google Sign-In...' : 'Continue with Google'}</span>
                 </button>
               ) : (
-                <div className="p-3 rounded-[4px] border border-[var(--status-success)]/40 bg-[var(--surface-elevated)] flex items-center justify-between gap-3">
+                <div className="p-3.5 rounded-xl border border-[var(--status-success)]/35 bg-[var(--surface-subtle)] flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3 min-w-0">
                     {firebaseUser.photoURL ? (
                       <img
                         src={firebaseUser.photoURL}
                         alt={firebaseUser.displayName || 'Google account'}
                         referrerPolicy="no-referrer"
-                        className="w-8 h-8 rounded-full border border-[var(--border-hairline)] shrink-0"
+                        className="w-9 h-9 rounded-full border border-[var(--border-hairline)] shrink-0"
                       />
                     ) : (
-                      <div className="w-8 h-8 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-xs font-semibold shrink-0">
+                      <div className="w-9 h-9 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-xs font-semibold shrink-0">
                         {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
                       </div>
                     )}
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-[var(--ink-primary)] truncate flex items-center gap-1.5">
+                      <div className="text-[13px] font-semibold text-[var(--ink-primary)] truncate flex items-center gap-1.5">
                         <span>{firebaseUser.displayName || 'Verified User'}</span>
                         <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)] shrink-0" />
                       </div>
                       <div className="text-[11px] font-mono text-[var(--ink-muted)] truncate">
-                        {firebaseUser.email} {loadingProfile ? '· Syncing Firestore...' : '· Firestore Connected'}
+                        {firebaseUser.email} {loadingProfile ? '· Syncing...' : '· Synced'}
                       </div>
                     </div>
                   </div>
                   <button
                     type="button"
                     onClick={handleGoogleSignOut}
-                    className="h-7 px-2.5 text-[11px] rounded-[3px] border border-[var(--border-hairline)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1 shrink-0"
+                    className="h-7 px-3 text-[11px] font-medium rounded-lg border border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 shrink-0 transition-colors"
                   >
                     <LogOut className="w-3 h-3" />
                     Switch
@@ -362,19 +392,19 @@ export const LoginGate: React.FC<LoginGateProps> = ({
             </div>
 
             {/* Step 2: Optional BYOK LLM Endpoint */}
-            <div className="pt-4 border-t border-[var(--border-hairline)] space-y-4">
+            <div className="pt-5 border-t border-[var(--border-hairline)] space-y-4">
               <div>
-                <h2 className="text-sm font-semibold text-[var(--ink-primary)]">
+                <h2 className="text-[14px] font-semibold tracking-tight text-[var(--ink-primary)]">
                   2. Model Provider Endpoint (Optional)
                 </h2>
                 <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
-                  Configure your BYOK endpoint for automated patching and repository queries, or launch directly in Local Workspace mode.
+                  Configure a BYOK endpoint for automated patching, or open directly in Local Workspace mode.
                 </p>
               </div>
 
               <div>
                 <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1.5">
-                  Model Provider
+                  Provider Preset
                 </label>
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
                   {(presets.length > 0
@@ -390,10 +420,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                       key={item.id}
                       type="button"
                       onClick={() => handleSelectProvider(item.id)}
-                      className={`h-8 px-2.5 text-xs font-medium rounded-[4px] border text-left truncate transition-colors ${
+                      className={`h-8 px-2.5 text-xs font-medium rounded-lg border text-left truncate transition-all ${
                         provider === item.id
                           ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
-                          : 'border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                          : 'border-[var(--border-hairline)] bg-[var(--surface-subtle)] text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
                       }`}
                     >
                       {item.name}
@@ -412,7 +442,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
                     placeholder="https://api.openai.com/v1"
-                    className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                    className="w-full h-9 px-3 text-xs font-mono rounded-lg bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:border-[var(--accent-primary)]"
                   />
                 </div>
 
@@ -426,7 +456,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                     onChange={(e) => setModel(e.target.value)}
                     list="provider-model-suggestions"
                     placeholder="gpt-4o-mini"
-                    className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                    className="w-full h-9 px-3 text-xs font-mono rounded-lg bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:border-[var(--accent-primary)]"
                   />
                   {currentPreset && (
                     <datalist id="provider-model-suggestions">
@@ -445,7 +475,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                     Provider API Key
                   </label>
                   <span className="text-[11px] text-[var(--ink-muted)]">
-                    {currentPreset?.requiresKey === false ? 'Optional for local Ollama' : 'Session memory only · Never saved to cloud'}
+                    {currentPreset?.requiresKey === false ? 'Optional for Ollama' : 'Session memory only'}
                   </span>
                 </div>
                 <div className="relative">
@@ -454,7 +484,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
                     placeholder={currentPreset?.requiresKey === false ? 'Not required for local server' : 'sk-...'}
-                    className="w-full h-9 pl-3 pr-9 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                    className="w-full h-9 pl-3 pr-9 text-xs font-mono rounded-lg bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:border-[var(--accent-primary)]"
                   />
                   <button
                     type="button"
@@ -470,10 +500,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({
 
             {testResult && (
               <div
-                className={`px-3 py-2 rounded-[4px] border text-xs flex items-center gap-2 ${
+                className={`px-3.5 py-2.5 rounded-xl border text-xs flex items-center gap-2 ${
                   testResult.ok
-                    ? 'border-[var(--status-success)]/40 bg-[var(--status-success)]/10 text-[var(--status-success)]'
-                    : 'border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-[var(--status-danger)]'
+                    ? 'border-[var(--status-success)]/35 bg-[var(--status-success)]/10 text-[var(--status-success)]'
+                    : 'border-[var(--status-danger)]/35 bg-[var(--status-danger)]/10 text-[var(--status-danger)]'
                 }`}
               >
                 {testResult.ok ? (
@@ -486,21 +516,21 @@ export const LoginGate: React.FC<LoginGateProps> = ({
             )}
 
             {error && (
-              <div className="px-3 py-2 rounded-[4px] border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center gap-2">
+              <div className="px-3.5 py-2.5 rounded-xl border border-[var(--status-danger)]/35 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
                 <span className="break-words">{error}</span>
               </div>
             )}
 
-            <div className="pt-2 flex flex-wrap items-center justify-between gap-2.5 border-t border-[var(--border-hairline)]">
+            <div className="pt-4 flex flex-wrap items-center justify-between gap-2.5 border-t border-[var(--border-hairline)]">
               <button
                 type="button"
                 disabled={testing || submitting || !firebaseUser}
                 onClick={handleVerifyConnection}
-                className="h-9 px-3.5 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
+                className="h-9 px-3.5 text-xs font-medium rounded-lg border border-[var(--border-strong)] bg-[var(--surface-canvas)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
               >
                 {testing && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                Verify Connection
+                Verify Endpoint
               </button>
 
               <div className="flex items-center gap-2">
@@ -508,7 +538,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                   type="button"
                   disabled={submitting || !firebaseUser || loadingProfile}
                   onClick={() => handleOpenStudio(true)}
-                  className="h-9 px-3.5 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 transition-colors"
+                  className="h-9 px-3.5 text-xs font-medium rounded-lg border border-[var(--border-strong)] bg-[var(--surface-canvas)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 transition-colors"
                 >
                   Open Local Workspace
                 </button>
@@ -517,13 +547,13 @@ export const LoginGate: React.FC<LoginGateProps> = ({
                   type="button"
                   disabled={submitting || !firebaseUser || loadingProfile}
                   onClick={() => handleOpenStudio(false)}
-                  className="h-9 px-4 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
+                  className="h-9 px-4 text-xs font-semibold rounded-lg bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors shadow-xs"
                 >
                   {submitting ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   ) : (
                     <>
-                      Connect & Open Studio
+                      Launch Studio
                       <ArrowRight className="w-3.5 h-3.5" />
                     </>
                   )}

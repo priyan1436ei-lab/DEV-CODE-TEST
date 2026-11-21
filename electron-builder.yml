@@ -6,25 +6,23 @@ publish: null
 asar: true
 asarUnpack:
   - electron/assets/**/*
-  - server/**/*
-  - server.ts
-  - src/types/**/*
-  - node_modules/tsx/**/*
-  - node_modules/esbuild/**/*
+  - dist/**/*
+  - dist-server/**/*
 directories:
   buildResources: electron/assets
   output: dist-electron
 files:
   - dist/**/*
-  - server/**/*
-  - server.ts
-  - src/types/**/*
+  - dist-server/**/*
   - electron/**/*
   - firebase-applet-config.json
   - package.json
   - "!data/**"
   - "!.env*"
-  - "!src/assets/images/**"
+  - "!src/**"
+  - "!server/**"
+  - "!server.ts"
+  - "!node_modules/**"
   - "!**/*.map"
   - "!security_spec.md"
   - "!firestore.rules.test.ts"
