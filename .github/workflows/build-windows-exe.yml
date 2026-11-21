@@ -35,6 +35,9 @@ jobs:
       - name: Ensure Windows icon resources exist
         run: node scripts/ensure-win-icon.mjs
 
+      - name: Run full end-to-end production & packaging verification suite
+        run: npm test
+
       - name: Build Windows Installer & Portable EXE (with optional Trusted CA Code Signing)
         shell: pwsh
         env:

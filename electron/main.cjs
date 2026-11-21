@@ -1,4 +1,5 @@
-const { app, BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, net: electronNet, safeStorage, shell } = require('electron');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
 const os = require('node:os');
@@ -13,7 +14,75 @@ if (!gotLock) {
 app.setAppUserModelId('com.devmind.studio');
 
 let embeddedHttpServer = null;
+let serverModuleRef = null;
+let backendPort = null;
+let backendDataDir = null;
+let networkMonitorTimer = null;
+let lastKnownOnline = true;
 let mainWindow = null;
+
+function getVaultFilePath() {
+  return path.join(app.getPath('userData'), 'secure-vault.json');
+}
+
+function assertValidVaultKey(key) {
+  if (typeof key !== 'string' || !/^[a-zA-Z0-9_.-]{1,64}$/.test(key)) {
+    throw new Error('Invalid vault key format.');
+  }
+}
+
+function readEncryptedVault() {
+  try {
+    const filePath = getVaultFilePath();
+    if (!fs.existsSync(filePath)) return {};
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeEncryptedVault(record) {
+  const filePath = getVaultFilePath();
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(record, null, 2), { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(tmpPath, filePath);
+}
+
+function isVaultAvailable() {
+  try {
+    return Boolean(safeStorage && typeof safeStorage.isEncryptionAvailable === 'function' && safeStorage.isEncryptionAvailable());
+  } catch {
+    return false;
+  }
+}
+
+function checkElectronOnline() {
+  try {
+    if (electronNet && typeof electronNet.isOnline === 'function') {
+      return Boolean(electronNet.isOnline());
+    }
+  } catch {
+    // Fallback if called before app ready
+  }
+  return true;
+}
+
+function startNetworkMonitor() {
+  if (networkMonitorTimer) return;
+  lastKnownOnline = checkElectronOnline();
+  networkMonitorTimer = setInterval(() => {
+    const nowOnline = checkElectronOnline();
+    if (nowOnline !== lastKnownOnline) {
+      lastKnownOnline = nowOnline;
+      logStartup(`Network state changed -> ${nowOnline ? 'ONLINE' : 'OFFLINE'}`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('network:status-changed', nowOnline);
+      }
+    }
+  }, 4000);
+}
 
 function getStartupLogFile() {
   try {
@@ -138,14 +207,32 @@ async function startEmbeddedBackend() {
     dataDir,
   });
 
+  serverModuleRef = serverModule;
+  backendPort = started.port;
+  backendDataDir = dataDir;
   embeddedHttpServer = started.server;
   logStartup(`Embedded backend listening on http://127.0.0.1:${started.port}`);
   return started.port;
 }
 
 function stopBackend() {
+  if (networkMonitorTimer) {
+    clearInterval(networkMonitorTimer);
+    networkMonitorTimer = null;
+  }
+  try {
+    if (serverModuleRef && typeof serverModuleRef.flushServerState === 'function') {
+      serverModuleRef.flushServerState();
+      logStartup('Flushed embedded workspace state cleanly prior to shutdown.');
+    }
+  } catch (err) {
+    logStartup('Non-fatal error flushing server state during shutdown', err);
+  }
   if (!embeddedHttpServer) return;
   try {
+    if (typeof embeddedHttpServer.closeAllConnections === 'function') {
+      embeddedHttpServer.closeAllConnections();
+    }
     embeddedHttpServer.close();
   } catch {
     // ignore shutdown errors
@@ -267,6 +354,23 @@ async function createWindow() {
     return { action: 'deny' };
   });
 
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    if (errorCode === -3) return; // Ignore benign aborted navigations
+    logStartup(`Renderer did-fail-load (${errorCode}): ${errorDescription} [${validatedURL}]`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logStartup(`Renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`);
+    if (mainWindow && !mainWindow.isDestroyed() && details.reason !== 'clean-exit') {
+      dialog.showErrorBox(
+        'DevMind Studio Renderer Interrupted',
+        `The interface process exited unexpectedly (${details.reason}).\n\nReloading workspace...`
+      );
+      mainWindow.loadURL(baseUrl).catch(() => {});
+    }
+  });
+
+  startNetworkMonitor();
   await mainWindow.loadURL(baseUrl);
 }
 
@@ -301,6 +405,58 @@ ipcMain.handle('system:info', () => ({
   memoryMb: Math.round(process.memoryUsage().rss / (1024 * 1024)),
   totalMemoryGb: Number((os.totalmem() / 1024 ** 3).toFixed(1)),
   appVersion: app.getVersion(),
+}));
+
+// OS-Backed Encrypted Credential Vault (safeStorage — zero plaintext secrets)
+ipcMain.handle('vault:is-available', () => isVaultAvailable());
+
+ipcMain.handle('vault:get', (_event, key) => {
+  assertValidVaultKey(key);
+  if (!isVaultAvailable()) return null;
+  const vault = readEncryptedVault();
+  const cipherB64 = vault[key];
+  if (typeof cipherB64 !== 'string' || !cipherB64) return null;
+  try {
+    return safeStorage.decryptString(Buffer.from(cipherB64, 'base64'));
+  } catch {
+    return null;
+  }
+});
+
+ipcMain.handle('vault:set', (_event, key, value) => {
+  assertValidVaultKey(key);
+  if (typeof value !== 'string') {
+    throw new Error('Vault value must be a string.');
+  }
+  if (!isVaultAvailable()) {
+    return false;
+  }
+  const vault = readEncryptedVault();
+  vault[key] = safeStorage.encryptString(value).toString('base64');
+  writeEncryptedVault(vault);
+  return true;
+});
+
+ipcMain.handle('vault:delete', (_event, key) => {
+  assertValidVaultKey(key);
+  const vault = readEncryptedVault();
+  if (key in vault) {
+    delete vault[key];
+    writeEncryptedVault(vault);
+  }
+  return true;
+});
+
+// Network Connectivity & Desktop Diagnostics
+ipcMain.handle('network:is-online', () => checkElectronOnline());
+
+ipcMain.handle('diagnostics:get-info', () => ({
+  userDataDir: app.getPath('userData'),
+  dataDir: backendDataDir || path.join(app.getPath('userData'), 'data'),
+  startupLogPath: getStartupLogFile(),
+  backendPort: backendPort || 0,
+  safeStorageAvailable: isVaultAvailable(),
+  isPackaged: app.isPackaged,
 }));
 
 app.on('second-instance', () => {

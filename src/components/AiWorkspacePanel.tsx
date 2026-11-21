@@ -13,6 +13,8 @@ import {
 } from 'lucide-react';
 import type {
   AgentTask,
+  AiProvenance,
+  AiRoutingMode,
   ChatMessage,
   CodeChange,
   CodeCitation,
@@ -25,6 +27,8 @@ interface AiWorkspacePanelProps {
   activeProjectName: string;
   tasks: AgentTask[];
   chatMessages: ChatMessage[];
+  streamingReply?: { content: string; provenance: AiProvenance; modelUsed: string } | null;
+  onChangeAiRoutingMode?: (mode: AiRoutingMode) => Promise<void>;
   onCreateTask: (
     title: string,
     description: string,
@@ -45,11 +49,19 @@ const PRIORITY_TONE: Record<TaskPriority, string> = {
   low: 'text-[var(--status-success)]',
 };
 
+const PROVENANCE_LABEL: Record<AiProvenance, { text: string; tone: string }> = {
+  online: { text: 'Online AI', tone: 'text-[var(--accent-primary)]' },
+  'local-ollama': { text: 'Local Ollama', tone: 'text-[var(--status-success)]' },
+  'local-rules': { text: 'Local AST', tone: 'text-[var(--ink-muted)]' },
+};
+
 export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
   session,
   activeProjectName,
   tasks,
   chatMessages,
+  streamingReply = null,
+  onChangeAiRoutingMode,
   onCreateTask,
   onDecideApproval,
   onRollbackTask,
@@ -150,9 +162,25 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
           </button>
         </div>
 
-        <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[115px]" title={session.llm.model}>
-          {session.llm.configured ? session.llm.model : 'Local Rules'}
-        </span>
+        <div className="flex items-center gap-1.5 min-w-0">
+          {onChangeAiRoutingMode ? (
+            <select
+              aria-label="AI Routing Mode"
+              value={session.aiRoutingMode || 'auto'}
+              onChange={(e) => void onChangeAiRoutingMode(e.target.value as AiRoutingMode)}
+              className="h-6 px-1.5 text-[10px] font-mono rounded-md bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+              title="Switch between Auto, Online AI, and Local Ollama AI"
+            >
+              <option value="auto">AI: Auto</option>
+              <option value="online">AI: Online</option>
+              <option value="local">AI: Local</option>
+            </select>
+          ) : (
+            <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[115px]" title={session.llm.model}>
+              {session.llm.configured ? session.llm.model : 'Local Rules'}
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -392,36 +420,61 @@ export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
                 Ask questions about symbols, routes, dependencies, or security controls in {activeProjectName}.
               </div>
             ) : (
-              safeChat.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`p-3 rounded-[4px] border text-xs leading-relaxed ${
-                    msg.role === 'user'
-                      ? 'bg-[var(--accent-soft)] border-[var(--accent-primary)]/30 text-[var(--ink-primary)] ml-4'
-                      : 'bg-[var(--surface-elevated)] border-[var(--border-hairline)] text-[var(--ink-primary)] mr-2'
-                  }`}
-                >
-                  <div className="text-[10px] font-mono uppercase text-[var(--ink-muted)] mb-1 flex items-center justify-between">
-                    <span>{msg.role === 'user' ? session.displayName : msg.modelUsed || 'Workspace Assistant'}</span>
-                    {msg.tokensUsed ? <span className="tabular-nums">{msg.tokensUsed} tok</span> : null}
-                  </div>
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
-                  {msg.citations && msg.citations.length > 0 && (
-                    <div className="mt-2 pt-2 border-t border-[var(--border-hairline)] flex flex-wrap gap-1.5">
-                      {msg.citations.map((cit, i) => (
-                        <button
-                          key={`${cit.filePath}:${cit.startLine}:${i}`}
-                          type="button"
-                          onClick={() => onOpenCitation(cit)}
-                          className="px-2 py-0.5 text-[11px] font-mono rounded-[3px] border border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--accent-primary)] hover:border-[var(--accent-primary)]"
-                        >
-                          {cit.filePath}:{cit.startLine}
-                        </button>
-                      ))}
+              <>
+                {safeChat.map((msg) => {
+                  const provMeta = msg.provenance ? PROVENANCE_LABEL[msg.provenance] : null;
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`p-3 rounded-[4px] border text-xs leading-relaxed ${
+                        msg.role === 'user'
+                          ? 'bg-[var(--accent-soft)] border-[var(--accent-primary)]/30 text-[var(--ink-primary)] ml-4'
+                          : 'bg-[var(--surface-elevated)] border-[var(--border-hairline)] text-[var(--ink-primary)] mr-2'
+                      }`}
+                    >
+                      <div className="text-[10px] font-mono uppercase text-[var(--ink-muted)] mb-1 flex items-center justify-between gap-2">
+                        <span className="truncate">
+                          {msg.role === 'user' ? session.displayName : msg.modelUsed || 'Workspace Assistant'}
+                        </span>
+                        <span className="inline-flex items-center gap-2 shrink-0">
+                          {msg.role === 'assistant' && provMeta && (
+                            <span className={`font-semibold ${provMeta.tone}`}>
+                              {provMeta.text}
+                            </span>
+                          )}
+                          {msg.tokensUsed ? <span className="tabular-nums">{msg.tokensUsed} tok</span> : null}
+                        </span>
+                      </div>
+                      <div className="whitespace-pre-wrap">{msg.content}</div>
+                      {msg.citations && msg.citations.length > 0 && (
+                        <div className="mt-2 pt-2 border-t border-[var(--border-hairline)] flex flex-wrap gap-1.5">
+                          {msg.citations.map((cit, i) => (
+                            <button
+                              key={`${cit.filePath}:${cit.startLine}:${i}`}
+                              type="button"
+                              onClick={() => onOpenCitation(cit)}
+                              className="px-2 py-0.5 text-[11px] font-mono rounded-[3px] border border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--accent-primary)] hover:border-[var(--accent-primary)]"
+                            >
+                              {cit.filePath}:{cit.startLine}
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
-              ))
+                  );
+                })}
+                {streamingReply && (
+                  <div className="p-3 rounded-[4px] border bg-[var(--surface-elevated)] border-[var(--accent-primary)]/35 text-[var(--ink-primary)] mr-2 text-xs leading-relaxed">
+                    <div className="text-[10px] font-mono uppercase text-[var(--ink-muted)] mb-1 flex items-center justify-between gap-2">
+                      <span className="truncate">{streamingReply.modelUsed}</span>
+                      <span className={`font-semibold ${PROVENANCE_LABEL[streamingReply.provenance].tone}`}>
+                        {PROVENANCE_LABEL[streamingReply.provenance].text} · Streaming
+                      </span>
+                    </div>
+                    <div className="whitespace-pre-wrap">{streamingReply.content || '...'}</div>
+                  </div>
+                )}
+              </>
             )}
           </div>
 

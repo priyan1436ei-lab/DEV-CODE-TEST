@@ -6,11 +6,15 @@ import {
   Blocks,
   Bug,
   Cloud,
+  CloudOff,
   Code2,
+  Cpu,
   FileCode2,
   FolderGit2,
   GitBranch,
   GitFork,
+  HardDrive,
+  HelpCircle,
   History,
   LayoutDashboard,
   LogOut,
@@ -26,29 +30,32 @@ import {
   Settings,
   ShieldAlert,
   Sun,
+  UserCheck,
   X,
 } from 'lucide-react';
 import { AiWorkspacePanel } from './components/AiWorkspacePanel';
 import { BottomWorkbenchPanel } from './components/BottomWorkbenchPanel';
 import { CodeEditorView } from './components/CodeEditorView';
 import { CommandPalette } from './components/CommandPalette';
+import { ConflictResolutionModal } from './components/ConflictResolutionModal';
 import { DashboardView } from './components/DashboardView';
 import { DebuggingCenterView } from './components/DebuggingCenterView';
 import { ExecutionHistoryView } from './components/ExecutionHistoryView';
 import { ExtensionsView } from './components/ExtensionsView';
 import { ImportRepoModal } from './components/ImportRepoModal';
+import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 import { LoginGate } from './components/LoginGate';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { RepoBrainView } from './components/RepoBrainView';
 import { SecurityCenterView } from './components/SecurityCenterView';
 import { SettingsPolicyView } from './components/SettingsPolicyView';
-import { auth, isFirestoreOfflineError, signOutFirebase } from './firebase';
+import { auth, isFirestoreOfflineError, signInWithGoogle, signOutFirebase } from './firebase';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 import {
   devmindApi,
   getStoredSessionToken,
   setStoredSessionToken,
-  syncOfflineMutations,
   type ProviderPreset,
 } from './services/api';
 import {
@@ -72,20 +79,30 @@ import {
   offlineSaveFile,
   scanOfflineSecurityFindings,
 } from './services/offlineStore';
+import {
+  resolveSyncConflict,
+  runHybridSync,
+  subscribeSyncEngine,
+  type SyncEngineSnapshot,
+} from './services/syncEngine';
 import type {
   AgentTask,
+  AiProvenance,
+  AiRoutingMode,
   AuditLogEntry,
   ChatMessage,
   CodeChange,
   CodeCitation,
   DebugAnalysis,
   ExtensionHostSnapshot,
+  FirebaseConnectionStatus,
   PermissionLevel,
   PermissionPolicyRule,
   Project,
   PublicUserSession,
   ScreenId,
   SecurityFinding,
+  SyncConflictRecord,
   TaskPriority,
   UsageLedger,
 } from './types/devmind';
@@ -150,17 +167,47 @@ export function App() {
   const [bottomTab, setBottomTab] = useState<'problems' | 'extensions' | 'audit'>('problems');
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
+  const [conflictModalOpen, setConflictModalOpen] = useState(false);
   const [openMenu, setOpenMenu] = useState<MenuId>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [syncingOffline, setSyncingOffline] = useState(false);
   const [pendingSyncFiles, setPendingSyncFiles] = useState<Set<string>>(() => new Set());
+  const [streamingReply, setStreamingReply] = useState<{
+    content: string;
+    provenance: AiProvenance;
+    modelUsed: string;
+  } | null>(null);
+  const [pulsingFiles, setPulsingFiles] = useState<Set<string>>(() => new Set());
   const [toast, setToast] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
+
+  const { isOnline } = useOnlineStatus();
+  const [syncSnapshot, setSyncSnapshot] = useState<SyncEngineSnapshot>({
+    status: typeof navigator !== 'undefined' && !navigator.onLine ? 'Offline' : 'Synced',
+    pendingCount: 0,
+    conflicts: [],
+    lastSyncedAt: null,
+    lastError: null,
+    authExpired: false,
+    isSyncing: false,
+  });
 
   const activeProjectIdRef = useRef(activeProjectId);
   activeProjectIdRef.current = activeProjectId;
   const firebaseUidRef = useRef<string | null>(null);
   firebaseUidRef.current = firebaseUser?.uid ?? null;
+  const sessionRef = useRef<PublicUserSession | null>(null);
+  sessionRef.current = session;
+  const projectsRef = useRef<Project[]>(projects);
+  projectsRef.current = projects;
+  const tasksRef = useRef<AgentTask[]>(tasks);
+  tasksRef.current = tasks;
+  const prevGitStatusRef = useRef<{ projectId: string; statuses: Map<string, string> }>({
+    projectId: '',
+    statuses: new Map(),
+  });
+  const wasOnlineRef = useRef<boolean>(isOnline);
 
   // Propagate critical Firestore permission/quota errors to ErrorBoundary
   if (firestoreError) {
@@ -185,39 +232,69 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const handleSyncOfflineQueue = useCallback(async () => {
-    if (syncingOffline || (typeof navigator !== 'undefined' && !navigator.onLine)) return;
-    setSyncingOffline(true);
-    try {
-      const result = await syncOfflineMutations();
-      const remainingKeys = await getPendingSyncFileKeys();
-      setPendingSyncFiles(remainingKeys);
-      if (result.synced > 0) {
-        const projRes = await devmindApi.listProjects();
-        setProjects(dedupeById(projRes.projects));
-        showToast(
-          `Synced ${result.synced} offline change${result.synced === 1 ? '' : 's'} from IndexedDB.`
-        );
-      }
-    } catch {
-      // Remain queued until next reconnect
-    } finally {
-      setSyncingOffline(false);
-    }
-  }, [showToast, syncingOffline]);
+  // Subscribe to offline-first sync engine state
+  useEffect(() => {
+    return subscribeSyncEngine(setSyncSnapshot);
+  }, []);
 
+  const handleSyncOfflineQueue = useCallback(
+    async (force = false) => {
+      if (syncingOffline || !isOnline) return;
+      setSyncingOffline(true);
+      try {
+        const snap = await runHybridSync({
+          firebaseUser,
+          projects: projectsRef.current,
+          tasks: tasksRef.current,
+          force,
+        });
+        const remainingKeys = await getPendingSyncFileKeys();
+        setPendingSyncFiles(remainingKeys);
+        if (sessionRef.current) {
+          try {
+            const projRes = await devmindApi.listProjects();
+            setProjects(dedupeById(projRes.projects));
+          } catch {
+            // Keep local project state intact if backend refresh fails
+          }
+        }
+        if (snap.conflicts.length > 0) {
+          showToast(
+            `${snap.conflicts.length} cloud sync conflict${snap.conflicts.length === 1 ? '' : 's'} detected — review required before overwriting cloud data.`,
+            'error'
+          );
+        } else if (snap.status === 'Synced' && force) {
+          showToast('Workspace synchronized cleanly.');
+        } else if (snap.lastError) {
+          showToast(snap.lastError, 'error');
+        }
+      } catch (err) {
+        showToast(err instanceof Error ? err.message : 'Synchronization failed.', 'error');
+      } finally {
+        setSyncingOffline(false);
+      }
+    },
+    [firebaseUser, isOnline, showToast, syncingOffline]
+  );
+
+  // Automatic sync recovery when connectivity transitions from offline -> online
   useEffect(() => {
     void getPendingSyncFileKeys().then(setPendingSyncFiles).catch(() => {});
-    const onOnline = () => {
-      void handleSyncOfflineQueue();
-    };
-    window.addEventListener('online', onOnline);
-    return () => window.removeEventListener('online', onOnline);
-  }, [handleSyncOfflineQueue]);
+    if (!wasOnlineRef.current && isOnline && sessionRef.current) {
+      showToast('Connectivity restored — synchronizing offline queue...');
+      void handleSyncOfflineQueue(false);
+    }
+    wasOnlineRef.current = isOnline;
+  }, [isOnline, handleSyncOfflineQueue, showToast]);
 
-  // Listen to Firebase Auth state changes
+  // Listen to Firebase Auth state changes (never block offline startup or destroy local sessions)
   useEffect(() => {
+    const offlineFallbackTimer = window.setTimeout(() => {
+      setFirebaseAuthReady(true);
+    }, 1800);
+
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      window.clearTimeout(offlineFallbackTimer);
       setFirebaseUser(user);
       setFirebaseAuthReady(true);
       if (!user) {
@@ -225,11 +302,17 @@ export function App() {
         setCloudExtensions([]);
         setCloudTasks([]);
         setCloudProjects([]);
-        setStoredSessionToken(null);
-        setSession(null);
+        // Only clear session if it was a cloud-only session; preserve active Local Profile sessions!
+        if (sessionRef.current && sessionRef.current.authMode !== 'local') {
+          setStoredSessionToken(null);
+          setSession(null);
+        }
       }
     });
-    return () => unsubscribe();
+    return () => {
+      window.clearTimeout(offlineFallbackTimer);
+      unsubscribe();
+    };
   }, []);
 
   // Attach Firestore real-time listeners ONLY when Firebase auth is ready and user is authenticated
@@ -316,25 +399,72 @@ export function App() {
     return () => unsubscribe();
   }, []);
 
-  // Global keyboard shortcuts (Ctrl+K Command Palette, Ctrl+B Explorer, Ctrl+J Bottom Panel)
+  // Global keyboard shortcuts matching KeyboardShortcutsModal cheat sheet
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const target = e.target as HTMLElement | null;
+      const isEditableTarget = Boolean(
+        target &&
+          (target.tagName === 'INPUT' ||
+            target.tagName === 'TEXTAREA' ||
+            target.tagName === 'SELECT' ||
+            target.isContentEditable)
+      );
+      const hasMod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+
+      if (hasMod && key === 'k') {
         e.preventDefault();
+        setShortcutsHelpOpen(false);
         setCommandPaletteOpen((v) => !v);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
+      } else if (hasMod && e.key === '/') {
+        e.preventDefault();
+        setCommandPaletteOpen(false);
+        setOpenMenu(null);
+        setShortcutsHelpOpen((v) => !v);
+      } else if ((e.key === '?' && !hasMod && !e.altKey && !isEditableTarget) || e.key === 'F1') {
+        e.preventDefault();
+        setCommandPaletteOpen(false);
+        setOpenMenu(null);
+        setShortcutsHelpOpen((v) => !v);
+      } else if (hasMod && key === 'b') {
         e.preventDefault();
         setExplorerOpen((v) => !v);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
+      } else if (hasMod && key === 'j') {
         e.preventDefault();
         setBottomPanelCollapsed((v) => !v);
+      } else if (hasMod && e.key === '.') {
+        e.preventDefault();
+        setRightPanelOpen((v) => !v);
+      } else if (hasMod && e.shiftKey && key === 'l') {
+        e.preventDefault();
+        handleThemeChange(theme === 'dark' ? 'light' : 'dark');
+      } else if (hasMod && !e.shiftKey && !e.altKey && e.key === ',') {
+        e.preventDefault();
+        setScreen('settings');
+      } else if (hasMod && !e.shiftKey && !e.altKey && ['1', '2', '3', '4', '5', '6', '7'].includes(e.key)) {
+        const screenMap: Record<string, ScreenId> = {
+          '1': 'explorer',
+          '2': 'dashboard',
+          '3': 'brain',
+          '4': 'extensions',
+          '5': 'debugging',
+          '6': 'security',
+          '7': 'history',
+        };
+        const nextScreen = screenMap[e.key];
+        if (nextScreen) {
+          e.preventDefault();
+          setScreen(nextScreen);
+        }
       } else if (e.key === 'Escape') {
         setOpenMenu(null);
+        setShortcutsHelpOpen(false);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  }, [theme, handleThemeChange]);
 
   // Close desktop menus when clicking outside
   useEffect(() => {
@@ -344,23 +474,55 @@ export function App() {
     return () => window.removeEventListener('click', close);
   }, [openMenu]);
 
-  // Check existing backend session once Firebase Auth is ready
+  // Restore existing backend session or OS-encrypted desktop local profile on boot (works offline)
   useEffect(() => {
-    if (!firebaseAuthReady) return;
-    const token = getStoredSessionToken();
-    if (!token || !firebaseUser) {
-      setBooting(false);
-      return;
-    }
-    devmindApi
-      .getSession()
-      .then((res) => setSession(res.session))
-      .catch(() => {
-        setStoredSessionToken(null);
-        setSession(null);
-      })
-      .finally(() => setBooting(false));
-  }, [firebaseAuthReady, firebaseUser]);
+    let cancelled = false;
+
+    const restoreSession = async () => {
+      try {
+        const token = getStoredSessionToken();
+        if (token) {
+          try {
+            const res = await devmindApi.getSession();
+            if (!cancelled) {
+              setSession(res.session);
+              setBooting(false);
+              return;
+            }
+          } catch {
+            setStoredSessionToken(null);
+          }
+        }
+
+        // In Electron desktop, check OS-backed safeStorage vault for last passwordless local profile
+        if (window.devmindDesktop?.vaultGet) {
+          const savedProfileId = await window.devmindDesktop
+            .vaultGet('active_local_profile_id')
+            .catch(() => null);
+          if (savedProfileId) {
+            try {
+              const unlocked = await devmindApi.unlockLocalProfile(savedProfileId);
+              if (!cancelled) {
+                setStoredSessionToken(unlocked.token);
+                setSession(unlocked.session);
+                setBooting(false);
+                return;
+              }
+            } catch {
+              // Profile may require passcode or was deleted; fall through to LoginGate
+            }
+          }
+        }
+      } finally {
+        if (!cancelled) setBooting(false);
+      }
+    };
+
+    void restoreSession();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refreshProjectData = useCallback(async (projectId: string) => {
     if (!projectId) return;
@@ -408,11 +570,11 @@ export function App() {
   }, [refreshProjectData, cloudProfile?.activeProjectId]);
 
   useEffect(() => {
-    if (!session || !firebaseUser) return;
+    if (!session) return;
     refreshGlobalData().catch((err) => {
       showToast(err instanceof Error ? err.message : 'Failed to load workspace data.', 'error');
     });
-  }, [session, firebaseUser, refreshGlobalData, showToast]);
+  }, [session, refreshGlobalData, showToast]);
 
   // Real-Time Server-Sent Events Sync
   useEffect(() => {
@@ -495,6 +657,49 @@ export function App() {
       setActiveFilePath(activeProject.files[0]?.path ?? null);
     }
   }, [activeProject, activeFilePath]);
+
+  // Track gitStatus / syncStatus transitions per file to trigger subtle pulse animation in sidebar tree
+  useEffect(() => {
+    if (!activeProject) return;
+    const prev = prevGitStatusRef.current;
+    const nextMap = new Map<string, string>();
+    const changedPaths: string[] = [];
+
+    for (const file of activeProject.files) {
+      const isPending =
+        pendingSyncFiles.has(`${activeProject.id}:${file.path}`) ||
+        file.syncStatus === 'pending-sync';
+      const sig = `${file.gitStatus}:${isPending ? 'pending' : 'synced'}`;
+      nextMap.set(file.path, sig);
+
+      if (prev.projectId === activeProject.id) {
+        const oldSig = prev.statuses.get(file.path);
+        if (oldSig !== undefined && oldSig !== sig) {
+          changedPaths.push(file.path);
+        } else if (oldSig === undefined && prev.statuses.size > 0) {
+          changedPaths.push(file.path);
+        }
+      }
+    }
+
+    prevGitStatusRef.current = { projectId: activeProject.id, statuses: nextMap };
+
+    if (changedPaths.length > 0) {
+      setPulsingFiles((curr) => {
+        const updated = new Set(curr);
+        for (const p of changedPaths) updated.add(p);
+        return updated;
+      });
+      const timer = window.setTimeout(() => {
+        setPulsingFiles((curr) => {
+          const updated = new Set(curr);
+          for (const p of changedPaths) updated.delete(p);
+          return updated;
+        });
+      }, 950);
+      return () => window.clearTimeout(timer);
+    }
+  }, [activeProject, pendingSyncFiles]);
 
   const handleSelectProject = async (projectId: string) => {
     setActiveProjectId(projectId);
@@ -754,10 +959,45 @@ export function App() {
 
   const handleSendChat = async (message: string) => {
     if (!activeProject) return;
-    const res = await devmindApi.sendChatMessage(activeProject.id, message);
-    setChatMessages(dedupeById(res.messages));
-    const usageRes = await devmindApi.getUsage();
-    setUsage(usageRes.usage);
+    setStreamingReply(null);
+    try {
+      const res = await devmindApi.streamChatMessage(activeProject.id, message, (chunk) => {
+        setStreamingReply((prev) => ({
+          content: (prev?.content ?? '') + chunk.token,
+          provenance: chunk.provenance,
+          modelUsed: chunk.modelUsed,
+        }));
+      });
+      setChatMessages(dedupeById(res.messages));
+    } catch {
+      // Fallback to non-streaming endpoint if SSE stream is interrupted
+      const res = await devmindApi.sendChatMessage(activeProject.id, message);
+      setChatMessages(dedupeById(res.messages));
+    } finally {
+      setStreamingReply(null);
+      try {
+        const usageRes = await devmindApi.getUsage();
+        setUsage(usageRes.usage);
+      } catch {
+        // Ignore offline usage refresh failure
+      }
+    }
+  };
+
+  const handleChangeAiRoutingMode = async (mode: AiRoutingMode) => {
+    try {
+      const res = await devmindApi.updateAiRouting({ aiRoutingMode: mode });
+      setSession(res.session);
+      showToast(
+        mode === 'local'
+          ? `AI routing switched to Local Ollama (${res.session.localAi.model}).`
+          : mode === 'online'
+          ? `AI routing switched to Online Cloud (${res.session.llm.model}).`
+          : 'AI routing switched to Auto (Online when connected, Local Ollama when offline).'
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update AI routing mode.', 'error');
+    }
   };
 
   const handleAnalyzeError = async (errorLog: string) => {
@@ -778,11 +1018,106 @@ export function App() {
     showToast(`Created remediation task for ${finding.cwe}.`);
   };
 
+  const handleConnectFirebase = async () => {
+    if (!isOnline) {
+      showToast('Internet connection is required to sign in to Firebase Cloud.', 'error');
+      return;
+    }
+    try {
+      const user = await signInWithGoogle();
+      setFirebaseUser(user);
+      if (session?.localProfileId) {
+        const linked = await devmindApi.linkProfileToFirebase(
+          session.localProfileId,
+          user.uid,
+          user.email ?? null
+        );
+        setSession(linked.session);
+      }
+      showToast(`Connected Firebase Cloud account (${user.email ?? user.uid}).`);
+      void handleSyncOfflineQueue(true);
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Firebase Google sign-in failed or was cancelled.',
+        'error'
+      );
+    }
+  };
+
+  const handleDisconnectFirebase = async () => {
+    try {
+      await signOutFirebase();
+    } catch {
+      // Ignore Firebase sign-out errors
+    }
+    setFirebaseUser(null);
+    setCloudProfile(null);
+    setCloudExtensions([]);
+    setCloudTasks([]);
+    setCloudProjects([]);
+    if (session?.localProfileId) {
+      try {
+        const unlinked = await devmindApi.linkProfileToFirebase(
+          session.localProfileId,
+          null,
+          null
+        );
+        setSession(unlinked.session);
+      } catch {
+        // Non-fatal
+      }
+    }
+    showToast('Disconnected Firebase Cloud account. Continuing with Local Profile.');
+  };
+
+  const handleSwitchProfile = async () => {
+    try {
+      await devmindApi.logout();
+    } catch {
+      // Ignore logout errors
+    }
+    try {
+      await window.devmindDesktop?.vaultDelete('active_local_profile_id');
+    } catch {
+      // Ignore vault deletion errors
+    }
+    setStoredSessionToken(null);
+    setSession(null);
+  };
+
+  const handleResolveConflict = async (
+    conflict: SyncConflictRecord,
+    resolution: 'keep-local' | 'keep-cloud'
+  ) => {
+    const snap = await resolveSyncConflict(conflict, resolution, firebaseUser);
+    if (activeProjectIdRef.current) {
+      try {
+        const taskRes = await devmindApi.listTasks(activeProjectIdRef.current);
+        setTasks(dedupeById(taskRes.tasks));
+      } catch {
+        // Keep local tasks
+      }
+    }
+    showToast(
+      resolution === 'keep-local'
+        ? `Kept local changes for "${conflict.title}" and pushed to cloud.`
+        : `Accepted newer cloud version for "${conflict.title}".`
+    );
+    if (snap.conflicts.length === 0) {
+      setConflictModalOpen(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await devmindApi.logout();
     } catch {
       // Ignore backend logout errors
+    }
+    try {
+      await window.devmindDesktop?.vaultDelete('active_local_profile_id');
+    } catch {
+      // Ignore vault deletion errors
     }
     try {
       await signOutFirebase();
@@ -808,7 +1143,7 @@ export function App() {
     }
   };
 
-  if (booting || !firebaseAuthReady) {
+  if (booting) {
     return (
       <div className="h-screen w-screen bg-[var(--surface-chrome)] flex items-center justify-center text-xs text-[var(--ink-secondary)]">
         Starting DevMind Studio...
@@ -816,16 +1151,21 @@ export function App() {
     );
   }
 
-  if (!firebaseUser || !session) {
+  if (!session) {
     return (
       <LoginGate
         firebaseUser={firebaseUser}
         firebaseAuthReady={firebaseAuthReady}
         cloudProfile={cloudProfile}
         loadingProfile={loadingCloudProfile}
-        onAuthenticated={(token, nextSession, profile) => {
+        onAuthenticated={(token, nextSession, profile, localProfile) => {
           setStoredSessionToken(token);
           setSession(nextSession);
+          if (localProfile && !localProfile.hasPasscode && window.devmindDesktop?.vaultSet) {
+            window.devmindDesktop
+              .vaultSet('active_local_profile_id', localProfile.id)
+              .catch(() => {});
+          }
           if (profile) {
             setCloudProfile(profile);
             setTheme(profile.theme);
@@ -857,6 +1197,15 @@ export function App() {
     (extensionHost?.diagnostics.filter((d) => d.severity === 'warning').length ?? 0);
 
   const cloudSyncCount = cloudExtensions.length + cloudTasks.length + cloudProjects.length;
+  const firebaseStatus: FirebaseConnectionStatus = !isOnline
+    ? 'offline'
+    : syncSnapshot.authExpired
+    ? 'reauth-required'
+    : firebaseUser
+    ? 'connected'
+    : 'local-only';
+  const accountLabel = firebaseUser?.email || session.email || session.displayName;
+  const accountDisplayName = firebaseUser?.displayName || session.displayName || 'Developer';
 
   const workspaceNavItems: Array<{
     id: ScreenId;
@@ -1021,11 +1370,21 @@ export function App() {
                           type="button"
                           onClick={() => {
                             setOpenMenu(null);
+                            void handleSwitchProfile();
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white text-[var(--ink-primary)] transition-colors"
+                        >
+                          Switch Local Profile...
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenu(null);
                             handleLogout();
                           }}
                           className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--status-danger)] hover:text-white text-[var(--status-danger)] transition-colors truncate"
                         >
-                          Sign Out ({firebaseUser.email})
+                          Sign Out ({accountLabel})
                         </button>
                       </>
                     )}
@@ -1139,12 +1498,23 @@ export function App() {
                         <button
                           type="button"
                           onClick={() => {
+                            setShortcutsHelpOpen(true);
+                            setOpenMenu(null);
+                          }}
+                          className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white flex items-center justify-between transition-colors"
+                        >
+                          <span>Keyboard Shortcuts</span>
+                          <span className="font-mono text-[10px] opacity-75">{shortcutPrefix}/</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
                             setScreen('settings');
                             setOpenMenu(null);
                           }}
                           className="w-full px-2.5 py-1.5 rounded-lg text-left hover:bg-[var(--accent-primary)] hover:text-white transition-colors"
                         >
-                          Settings & Windows .exe Builder
+                          Settings &amp; Windows .exe Builder
                         </button>
                         <div className="px-2.5 py-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
                           Core Engine v{extensionHost?.engineVersion || '2.1.0'} · MIT
@@ -1222,31 +1592,51 @@ export function App() {
 
           <button
             type="button"
+            onClick={() => setShortcutsHelpOpen(true)}
+            title={`Keyboard Shortcuts Help (${shortcutPrefix}/ or ?)`}
+            className={`h-7 px-2 rounded-lg inline-flex items-center gap-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0 ${
+              shortcutsHelpOpen
+                ? 'bg-[var(--accent-soft)] text-[var(--accent-primary)]'
+                : 'text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]'
+            }`}
+          >
+            <HelpCircle className="w-3.5 h-3.5 shrink-0" />
+            <span>Help</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => handleThemeChange(theme === 'dark' ? 'light' : 'dark')}
-            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} appearance`}
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} appearance (${shortcutPrefix}Shift+L)`}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
           >
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Authenticated User Avatar */}
-          <div
-            className="hidden sm:flex items-center pl-1"
-            title={`Signed in via Google: ${firebaseUser.email || firebaseUser.displayName}`}
+          {/* Authenticated User / Local Profile Avatar */}
+          <button
+            type="button"
+            onClick={() => setScreen('settings')}
+            className="hidden sm:flex items-center gap-1.5 pl-1 pr-1.5 h-7 rounded-lg hover:bg-[var(--surface-hover)] transition-colors"
+            title={
+              firebaseUser
+                ? `Local Profile: ${session.displayName} · Firebase Cloud: ${firebaseUser.email}`
+                : `Local Profile: ${session.displayName} (Offline-First Local Mode)`
+            }
           >
-            {firebaseUser.photoURL ? (
+            {firebaseUser?.photoURL ? (
               <img
                 src={firebaseUser.photoURL}
-                alt={firebaseUser.displayName || 'User'}
+                alt={accountDisplayName}
                 referrerPolicy="no-referrer"
                 className="w-6 h-6 rounded-full border border-[var(--border-hairline)]"
               />
             ) : (
               <span className="w-6 h-6 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-[11px] font-semibold">
-                {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
+                {accountDisplayName.charAt(0).toUpperCase()}
               </span>
             )}
-          </div>
+          </button>
 
           <button
             type="button"
@@ -1367,6 +1757,7 @@ export function App() {
                   const isPendingFile =
                     Boolean(activeProject && pendingSyncFiles.has(`${activeProject.id}:${f.path}`)) ||
                     f.syncStatus === 'pending-sync';
+                  const isPulsing = pulsingFiles.has(f.path);
                   return (
                     <button
                       key={f.path}
@@ -1377,11 +1768,11 @@ export function App() {
                         setPendingDiff(null);
                         setScreen('explorer');
                       }}
-                      className={`w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between gap-2 text-xs transition-colors ${
+                      className={`file-tree-item w-full px-2.5 py-1.5 rounded-lg text-left flex items-center justify-between gap-2 text-xs transition-colors ${
                         isSelected
                           ? 'bg-[var(--surface-elevated)] text-[var(--ink-primary)] font-medium shadow-xs'
                           : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
-                      }`}
+                      } ${isPulsing ? 'file-tree-git-pulse' : ''}`}
                     >
                       <span className="inline-flex items-center gap-2 min-w-0">
                         <FileCode2
@@ -1394,14 +1785,33 @@ export function App() {
                       <span className="flex items-center gap-1.5 shrink-0 font-mono text-[10px]">
                         {isPendingFile && (
                           <span
-                            className="px-1.5 py-0.5 rounded-md bg-[var(--status-warning)]/15 text-[var(--status-warning)] text-[9px] font-medium"
+                            className={`px-1.5 py-0.5 rounded-md bg-[var(--status-warning)]/15 text-[var(--status-warning)] text-[9px] font-medium ${
+                              isPulsing ? 'git-badge-pulse' : ''
+                            }`}
                             title="Saved locally in IndexedDB — pending sync when online"
                           >
                             pending-sync
                           </span>
                         )}
                         {f.gitStatus === 'modified' && !isPendingFile && (
-                          <span className="text-[var(--status-warning)]">M</span>
+                          <span
+                            className={`text-[var(--status-warning)] font-semibold ${
+                              isPulsing ? 'git-badge-pulse' : ''
+                            }`}
+                            title="Git status: Modified"
+                          >
+                            M
+                          </span>
+                        )}
+                        {f.gitStatus === 'added' && !isPendingFile && (
+                          <span
+                            className={`text-[var(--status-success)] font-semibold ${
+                              isPulsing ? 'git-badge-pulse' : ''
+                            }`}
+                            title="Git status: Added"
+                          >
+                            A
+                          </span>
                         )}
                         {fileIssueCount > 0 && (
                           <span className="text-[var(--status-danger)] tabular-nums">{fileIssueCount}</span>
@@ -1518,6 +1928,9 @@ export function App() {
                 onReindex={handleReindex}
                 onExecuteExtensionCommand={handleExecuteExtensionCommand}
                 onOpenFileLine={handleOpenFileLine}
+                onOpenAgentPanel={() => setRightPanelOpen(true)}
+                onDecideApproval={handleDecideApproval}
+                onCancelTask={handleCancelTask}
               />
             )}
 
@@ -1574,6 +1987,18 @@ export function App() {
                 presets={presets}
                 usage={usage}
                 theme={theme}
+                isOnline={isOnline}
+                firebaseStatus={firebaseStatus}
+                firebaseEmail={firebaseUser?.email ?? null}
+                syncStatus={syncSnapshot.status}
+                pendingSyncCount={syncSnapshot.pendingCount}
+                conflictCount={syncSnapshot.conflicts.length}
+                lastSyncedAt={syncSnapshot.lastSyncedAt}
+                onSyncNow={() => void handleSyncOfflineQueue(true)}
+                onOpenConflicts={() => setConflictModalOpen(true)}
+                onConnectFirebase={() => void handleConnectFirebase()}
+                onDisconnectFirebase={() => void handleDisconnectFirebase()}
+                onSwitchProfile={() => void handleSwitchProfile()}
                 onThemeChange={handleThemeChange}
                 onSessionUpdated={(nextSession) => {
                   setSession(nextSession);
@@ -1624,6 +2049,8 @@ export function App() {
               activeProjectName={activeProject?.name || 'Workspace'}
               tasks={tasks}
               chatMessages={chatMessages}
+              streamingReply={streamingReply}
+              onChangeAiRoutingMode={handleChangeAiRoutingMode}
               onCreateTask={handleCreateTask}
               onDecideApproval={handleDecideApproval}
               onRollbackTask={handleRollbackTask}
@@ -1707,13 +2134,66 @@ export function App() {
             </span>
           )}
 
-          <span
-            className="hidden lg:inline-flex items-center gap-1.5 text-[var(--ink-muted)]"
-            title={`Firestore synced for ${firebaseUser.email}: ${cloudProjects.length} projects, ${cloudTasks.length} tasks, ${cloudExtensions.length} extensions`}
+          <button
+            type="button"
+            onClick={() => setScreen('settings')}
+            className="hidden xl:inline-flex items-center gap-1 text-[var(--ink-muted)] hover:text-[var(--ink-primary)] transition-colors"
+            title={`Local Profile: ${session.displayName} (Click to manage or switch profile)`}
           >
-            <Cloud className="w-3 h-3 text-[var(--accent-primary)]" />
-            <span className="tabular-nums">Cloud ({cloudSyncCount})</span>
-          </span>
+            <UserCheck className="w-3 h-3 text-[var(--accent-primary)]" />
+            <span className="max-w-[110px] truncate">{session.displayName}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setScreen('settings')}
+            className="hidden lg:inline-flex items-center gap-1 text-[var(--ink-muted)] hover:text-[var(--ink-primary)] transition-colors"
+            title={`AI Routing: ${session.aiRoutingMode.toUpperCase()} · Local Ollama: ${session.localAi.model}`}
+          >
+            <Cpu className="w-3 h-3 text-[var(--accent-primary)]" />
+            <span>
+              AI:{' '}
+              {session.aiRoutingMode === 'auto'
+                ? 'Auto'
+                : session.aiRoutingMode === 'local'
+                ? 'Local'
+                : 'Online'}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
+              if (firebaseStatus === 'reauth-required') {
+                void handleConnectFirebase();
+              } else {
+                setScreen('settings');
+              }
+            }}
+            className="hidden lg:inline-flex items-center gap-1 text-[var(--ink-muted)] hover:text-[var(--ink-primary)] transition-colors"
+            title={
+              firebaseUser
+                ? `Firebase Cloud connected (${firebaseUser.email}): ${cloudProjects.length} projects, ${cloudTasks.length} tasks, ${cloudExtensions.length} extensions`
+                : 'Local-Only workspace (click to connect optional Firebase Cloud sync in Settings)'
+            }
+          >
+            {firebaseStatus === 'connected' ? (
+              <Cloud className="w-3 h-3 text-[var(--accent-primary)]" />
+            ) : firebaseStatus === 'local-only' ? (
+              <HardDrive className="w-3 h-3 text-[var(--ink-muted)]" />
+            ) : (
+              <CloudOff className="w-3 h-3 text-[var(--status-warning)]" />
+            )}
+            <span className="tabular-nums">
+              {firebaseStatus === 'connected'
+                ? `Cloud (${cloudSyncCount})`
+                : firebaseStatus === 'reauth-required'
+                ? 'Cloud: Re-auth'
+                : firebaseStatus === 'offline'
+                ? 'Cloud: Offline'
+                : 'Local-Only'}
+            </span>
+          </button>
 
           <button
             type="button"
@@ -1725,9 +2205,47 @@ export function App() {
             <span className="tabular-nums">{activeExtensionsCount} Ext</span>
           </button>
 
-          <span className="hidden sm:inline text-[var(--ink-muted)]">
-            {sseConnected ? 'Synced' : 'Offline'}
-          </span>
+          {syncSnapshot.conflicts.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setConflictModalOpen(true)}
+              className="inline-flex items-center gap-1 text-[var(--status-warning)] hover:underline"
+              title="Resolve Cloud Sync Conflicts"
+            >
+              <AlertTriangle className="w-3 h-3" />
+              <span className="tabular-nums">Conflict ({syncSnapshot.conflicts.length})</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            disabled={!isOnline || syncingOffline}
+            onClick={() => void handleSyncOfflineQueue(true)}
+            className={`hidden sm:inline-flex items-center gap-1 transition-colors ${
+              syncSnapshot.status === 'Error'
+                ? 'text-[var(--status-danger)]'
+                : syncSnapshot.status === 'Conflict' || syncSnapshot.status === 'Offline'
+                ? 'text-[var(--status-warning)]'
+                : syncSnapshot.status === 'Pending' || syncSnapshot.status === 'Syncing'
+                ? 'text-[var(--accent-primary)]'
+                : 'text-[var(--ink-muted)] hover:text-[var(--ink-primary)]'
+            }`}
+            title={
+              syncSnapshot.lastSyncedAt
+                ? `Sync Status: ${syncSnapshot.status} · Last synced: ${new Date(
+                    syncSnapshot.lastSyncedAt
+                  ).toLocaleTimeString()} · Click to sync now`
+                : `Sync Status: ${syncSnapshot.status} · Local stream: ${
+                    sseConnected ? 'connected' : 'standby'
+                  }`
+            }
+          >
+            <RefreshCw className={`w-2.5 h-2.5 ${syncingOffline ? 'animate-spin' : ''}`} />
+            <span className="tabular-nums">
+              {syncSnapshot.status}
+              {syncSnapshot.pendingCount > 0 ? ` (${syncSnapshot.pendingCount})` : ''}
+            </span>
+          </button>
         </div>
       </footer>
 
@@ -1770,7 +2288,29 @@ export function App() {
         onImport={handleCreateProject}
       />
 
-      <OfflineIndicator syncing={syncingOffline} onSyncNow={() => void handleSyncOfflineQueue()} />
+      <KeyboardShortcutsModal
+        open={shortcutsHelpOpen}
+        isMacPlatform={isMacPlatform}
+        onClose={() => setShortcutsHelpOpen(false)}
+      />
+
+      <ConflictResolutionModal
+        open={conflictModalOpen}
+        conflicts={syncSnapshot.conflicts}
+        onClose={() => setConflictModalOpen(false)}
+        onResolve={handleResolveConflict}
+      />
+
+      <OfflineIndicator
+        syncStatus={syncSnapshot.status}
+        syncing={syncingOffline || syncSnapshot.isSyncing}
+        conflictCount={syncSnapshot.conflicts.length}
+        lastError={syncSnapshot.lastError}
+        authExpired={syncSnapshot.authExpired}
+        onSyncNow={() => void handleSyncOfflineQueue(true)}
+        onOpenConflicts={() => setConflictModalOpen(true)}
+        onReconnectFirebase={() => void handleConnectFirebase()}
+      />
     </div>
   );
 }

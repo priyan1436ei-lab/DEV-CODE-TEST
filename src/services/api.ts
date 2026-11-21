@@ -1,10 +1,15 @@
 import type {
   AgentTask,
+  AiProvenance,
+  AiRoutingMode,
   AuditLogEntry,
   ChatMessage,
   DebugAnalysis,
   ExtensionHostSnapshot,
   LlmProviderId,
+  LocalAiConfig,
+  LocalProfile,
+  OllamaRuntimeStatus,
   PermissionLevel,
   PermissionPolicyRule,
   Project,
@@ -15,9 +20,11 @@ import type {
   UsageLedger,
 } from '../types/devmind';
 import {
+  cacheLocalProfiles,
   cacheProjects,
   cacheSingleProject,
   cacheTasks,
+  getCachedLocalProfiles,
   getCachedProjectById,
   getCachedProjects,
   getCachedTasks,
@@ -32,6 +39,7 @@ import {
   rebuildProjectIndexLocally,
   removePendingMutation,
   scanOfflineSecurityFindings,
+  updatePendingMutation,
 } from './offlineStore';
 
 export interface ProviderPreset {
@@ -71,8 +79,10 @@ function isNetworkFailure(err: unknown): boolean {
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const token = getStoredSessionToken();
+  const isClientOffline = typeof navigator !== 'undefined' && !navigator.onLine;
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    'x-devmind-network': isClientOffline ? 'offline' : 'online',
     ...(init?.headers ? (init.headers as Record<string, string>) : {}),
   };
   if (token) {
@@ -96,15 +106,22 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export async function syncOfflineMutations(): Promise<{ synced: number; remaining: number }> {
+export async function syncOfflineMutations(options?: {
+  force?: boolean;
+}): Promise<{ synced: number; remaining: number }> {
   const queue = await getPendingMutations();
   if (queue.length === 0) return { synced: 0, remaining: 0 };
 
   let synced = 0;
+  const now = Date.now();
   const projectIdMap = new Map<string, string>();
 
   for (const item of queue) {
     if (item.id === undefined) continue;
+    if (!options?.force && item.nextRetryAt && item.nextRetryAt > now) {
+      continue;
+    }
+
     try {
       if (item.type === 'createProject') {
         const res = await request<{ project: Project }>('/api/v1/projects', {
@@ -148,11 +165,23 @@ export async function syncOfflineMutations(): Promise<{ synced: number; remainin
         synced += 1;
       }
     } catch (err) {
-      if (isNetworkFailure(err)) {
-        break;
+      const nextRetryCount = (item.retryCount ?? 0) + 1;
+      const backoffMs = Math.min(60_000, 1_000 * Math.pow(2, Math.min(10, nextRetryCount)));
+      const errMsg = err instanceof Error ? err.message : 'Mutation sync failed';
+      if (isNetworkFailure(err) || nextRetryCount <= 5) {
+        await updatePendingMutation({
+          ...item,
+          retryCount: nextRetryCount,
+          nextRetryAt: Date.now() + backoffMs,
+          lastError: errMsg,
+        });
+        if (isNetworkFailure(err)) {
+          break;
+        }
+      } else {
+        // Drop permanently invalid offline mutations after max retries so queue doesn't stall forever
+        await removePendingMutation(item.id);
       }
-      // Drop permanently invalid offline mutations (e.g. deleted task/project) so queue doesn't stall forever
-      await removePendingMutation(item.id);
     }
   }
 
@@ -252,6 +281,89 @@ export const devmindApi = {
     }),
 
   logout: () => request<{ ok: boolean }>('/api/v1/auth/logout', { method: 'POST' }),
+
+  // Offline-First Local Profiles (works with zero internet/Firebase)
+  listLocalProfiles: async () => {
+    try {
+      const res = await request<{ profiles: LocalProfile[] }>('/api/v1/local-profiles');
+      void cacheLocalProfiles(res.profiles);
+      return res;
+    } catch (err) {
+      if (isNetworkFailure(err)) {
+        return { profiles: await getCachedLocalProfiles() };
+      }
+      throw err;
+    }
+  },
+
+  createLocalProfile: async (body: {
+    displayName: string;
+    email?: string;
+    passcode?: string;
+    linkedFirebaseUid?: string;
+    linkedFirebaseEmail?: string;
+  }) => {
+    const res = await request<{
+      profile: LocalProfile;
+      token: string;
+      session: PublicUserSession;
+    }>('/api/v1/local-profiles', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    void offlineCache.saveSession(res.session);
+    return res;
+  },
+
+  unlockLocalProfile: async (profileId: string, passcode?: string) => {
+    const res = await request<{
+      profile: LocalProfile;
+      token: string;
+      session: PublicUserSession;
+    }>(`/api/v1/local-profiles/${encodeURIComponent(profileId)}/unlock`, {
+      method: 'POST',
+      body: JSON.stringify({ passcode }),
+    });
+    void offlineCache.saveSession(res.session);
+    return res;
+  },
+
+  linkProfileToFirebase: (
+    profileId: string,
+    firebaseUid: string | null,
+    firebaseEmail?: string | null
+  ) =>
+    request<{ profile: LocalProfile; session: PublicUserSession }>(
+      `/api/v1/local-profiles/${encodeURIComponent(profileId)}/link-cloud`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ firebaseUid, firebaseEmail }),
+      }
+    ),
+
+  deleteLocalProfile: (profileId: string) =>
+    request<{ ok: boolean; profiles: LocalProfile[] }>(
+      `/api/v1/local-profiles/${encodeURIComponent(profileId)}`,
+      { method: 'DELETE' }
+    ),
+
+  // Local AI (Ollama) Detection & Hybrid AI Routing
+  getLocalAiStatus: (host?: string) =>
+    request<{ status: OllamaRuntimeStatus }>(
+      host ? `/api/v1/ai/local/status?host=${encodeURIComponent(host)}` : '/api/v1/ai/local/status'
+    ),
+
+  updateAiRouting: async (body: {
+    aiRoutingMode?: AiRoutingMode;
+    localAi?: Partial<LocalAiConfig>;
+  }) => {
+    const res = await request<{ session: PublicUserSession }>('/api/v1/ai/routing', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    });
+    void offlineCache.saveSession(res.session);
+    return res;
+  },
 
   listProjects: async () => {
     try {
@@ -485,6 +597,78 @@ export const devmindApi = {
       method: 'POST',
       body: JSON.stringify({ message }),
     }),
+
+  streamChatMessage: async (
+    projectId: string,
+    message: string,
+    onChunk: (chunk: { token: string; provenance: AiProvenance; modelUsed: string }) => void,
+    signal?: AbortSignal
+  ): Promise<{ reply: ChatMessage; messages: ChatMessage[] }> => {
+    const token = getStoredSessionToken();
+    const isClientOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      'x-devmind-network': isClientOffline ? 'offline' : 'online',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+
+    const res = await fetch(`/api/v1/projects/${projectId}/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ message }),
+      signal,
+    });
+
+    if (!res.ok || !res.body) {
+      throw new Error(`Streaming chat failed (${res.status})`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalResult: { reply: ChatMessage; messages: ChatMessage[] } | null = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() ?? '';
+
+      for (const block of blocks) {
+        const line = block.trim();
+        if (!line.startsWith('data:')) continue;
+        const jsonStr = line.slice(5).trim();
+        if (!jsonStr) continue;
+        const evt = JSON.parse(jsonStr) as {
+          type?: string;
+          token?: string;
+          provenance?: AiProvenance;
+          modelUsed?: string;
+          reply?: ChatMessage;
+          messages?: ChatMessage[];
+          error?: string;
+        };
+        if (evt.type === 'chunk' && typeof evt.token === 'string') {
+          onChunk({
+            token: evt.token,
+            provenance: evt.provenance ?? 'local-rules',
+            modelUsed: evt.modelUsed ?? 'local',
+          });
+        } else if (evt.type === 'done' && evt.reply && Array.isArray(evt.messages)) {
+          finalResult = { reply: evt.reply, messages: evt.messages };
+        } else if (evt.type === 'error') {
+          throw new Error(evt.error || 'Streaming AI response failed');
+        }
+      }
+    }
+
+    if (!finalResult) {
+      throw new Error('AI stream ended before completing response.');
+    }
+    void offlineCache.saveChat(projectId, finalResult.messages);
+    return finalResult;
+  },
 
   getDebugAnalyses: async (projectId: string) => {
     try {

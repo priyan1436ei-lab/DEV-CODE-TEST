@@ -28270,6 +28270,43 @@ ${findings.map((f) => `- [${f.severity.toUpperCase()}] ${f.filePath}:${f.line} $
       `DEVELOPER QUESTION:
 ${question}`
     ].filter(Boolean).join("\n\n");
+    if (!llmConfig.configured) {
+      const hits = hybridSearchRepository(question, project.chunks, project.architecture.edges, 6);
+      const citations = hits.slice(0, 4).map((h) => ({
+        filePath: h.filePath,
+        startLine: h.startLine,
+        endLine: h.endLine,
+        symbolName: h.symbolName
+      }));
+      const matchedLines = hits.length > 0 ? hits.slice(0, 4).map(
+        (h) => `- **\`${h.filePath}:${h.startLine}-${h.endLine}\`** (\`${h.symbolName}\`) \u2014 ${h.matchReason} (score ${h.score})`
+      ).join("\n") : "- No direct symbol hits found; try searching by function name, filename, or module keyword.";
+      const securitySummary = findings.length > 0 ? `
+
+**Open Static Findings (${findings.length}):**
+${findings.slice(0, 3).map((f) => `- [${f.severity.toUpperCase()}] \`${f.filePath}:${f.line}\` \u2014 ${f.title} (${f.cwe})`).join("\n")}` : "";
+      const assistantMsg = {
+        id: uid2("msg"),
+        role: "assistant",
+        content: `### Local Repository Analysis (${project.name})
+
+Matched **${hits.length}** indexed code block${hits.length === 1 ? "" : "s"} across ${project.architecture.totalFiles} files (${project.architecture.totalSymbols} AST symbols):
+
+${matchedLines}${securitySummary}
+
+_Running in Local Rules mode \u2014 configure a BYOK provider in Settings for generative synthesis._`,
+        citations,
+        modelUsed: "local-ast/hybrid-search",
+        tokensUsed: 0,
+        costUsd: 0,
+        redactedSecretsCount,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      history.push(assistantMsg);
+      this.chatHistories.set(project.id, history.slice(-30));
+      this.emitSync("chat_updated", project.id);
+      return assistantMsg;
+    }
     try {
       const res = await this.gateway.generateJson({
         config: llmConfig,
@@ -28311,6 +28348,66 @@ Answer the developer's question with crisp, evidence-based technical precision. 
   async analyzeDebugError(projectId, errorLog, llmConfig) {
     const project = this.getProject(projectId);
     const { contextBlock } = this.buildRepoContextPrompt(project, errorLog, true);
+    if (!llmConfig.configured) {
+      const validPaths2 = new Set(project.files.map((f) => f.path));
+      const affectedFiles = [];
+      const seenKey = /* @__PURE__ */ new Set();
+      const frameRegex = /([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+):(\d+)/g;
+      let match;
+      while ((match = frameRegex.exec(errorLog)) !== null) {
+        const rawRef = match[1].replace(/^\.\//, "");
+        const lineNum = Math.max(1, Number(match[2]) || 1);
+        const matchedFile = project.files.find(
+          (f) => f.path === rawRef || f.path.endsWith(`/${rawRef}`) || rawRef.endsWith(f.path)
+        );
+        if (matchedFile && validPaths2.has(matchedFile.path)) {
+          const sym = project.symbols.find(
+            (s) => s.filePath === matchedFile.path && lineNum >= s.startLine && lineNum <= s.endLine
+          );
+          const key = `${matchedFile.path}:${lineNum}`;
+          if (!seenKey.has(key)) {
+            seenKey.add(key);
+            affectedFiles.push({
+              filePath: matchedFile.path,
+              startLine: lineNum,
+              endLine: Math.min(matchedFile.lineCount, lineNum + 5),
+              symbolName: sym?.name || import_node_path3.default.basename(matchedFile.path)
+            });
+          }
+        }
+      }
+      if (affectedFiles.length === 0) {
+        const hits = hybridSearchRepository(errorLog, project.chunks, project.architecture.edges, 4);
+        for (const h of hits) {
+          affectedFiles.push({
+            filePath: h.filePath,
+            startLine: h.startLine,
+            endLine: h.endLine,
+            symbolName: h.symbolName
+          });
+        }
+      }
+      const firstLine = errorLog.split("\n").map((l) => l.trim()).find(Boolean) || "Runtime error detected";
+      const primaryRef = affectedFiles[0] ? `${affectedFiles[0].filePath}:${affectedFiles[0].startLine} (${affectedFiles[0].symbolName})` : project.name;
+      const analysis2 = {
+        id: uid2("dbg"),
+        projectId: project.id,
+        errorInput: errorLog,
+        rootCause: `${firstLine} \u2014 traced to ${primaryRef}`,
+        confidence: affectedFiles.length > 0 ? "high" : "medium",
+        explanation: affectedFiles.length > 0 ? `Matched stack frame & AST symbols in ${affectedFiles.map((f) => `${f.filePath}:${f.startLine}`).join(", ")}. Validate null/undefined guards, input bounds, and return contracts around the referenced lines.` : `Scanned ${project.architecture.totalFiles} files in Local Rules mode. Add an explicit file:line stack frame or configure a BYOK provider for deep semantic trace analysis.`,
+        affectedFiles: affectedFiles.slice(0, 6),
+        proposedPatchPrompt: `Add defensive validation and fix "${firstLine}" in ${primaryRef}.`,
+        modelUsed: "local-ast/stack-analyzer",
+        tokensUsed: 0,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      };
+      const existing2 = this.debugAnalyses.get(project.id) ?? [];
+      existing2.unshift(analysis2);
+      this.debugAnalyses.set(project.id, existing2.slice(0, 15));
+      this.emitSync("debug_updated", project.id);
+      return analysis2;
+    }
     const res = await this.gateway.generateJson({
       config: llmConfig,
       operation: "debug_root_cause",
@@ -28760,6 +28857,20 @@ function extractBearerToken(req) {
   const match = header.match(/^Bearer\s+(.+)$/i);
   return match ? match[1].trim() : null;
 }
+function assertSafeRepoFilePath(rawPath) {
+  const normalized = rawPath.replace(/\\/g, "/").trim();
+  if (!normalized || normalized.length > 260) {
+    throw new Error("File path must be between 1 and 260 characters.");
+  }
+  if (normalized.includes("\0") || normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized)) {
+    throw new Error("Invalid file path: absolute paths and null bytes are not permitted.");
+  }
+  const segments = normalized.split("/");
+  if (segments.some((seg) => seg === "" || seg === "." || seg === "..")) {
+    throw new Error("Invalid file path: relative traversal segments are not permitted.");
+  }
+  return normalized;
+}
 function getSessionLlmConfig(req) {
   const token = extractBearerToken(req);
   const session = store.getSessionByToken(token);
@@ -28781,7 +28892,22 @@ async function startServer(options) {
   const app = (0, import_express.default)();
   const PORT = Number(options?.port ?? process.env.PORT ?? 3e3);
   const HOST = options?.host || process.env.HOST || "0.0.0.0";
+  const activeSseResponses = /* @__PURE__ */ new Set();
+  app.disable("x-powered-by");
+  app.use((_req, res, next) => {
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+    next();
+  });
   app.use(import_express.default.json({ limit: "10mb" }));
+  app.use(
+    (err, _req, res, next) => {
+      if (err instanceof SyntaxError && "body" in err) {
+        return res.status(400).json({ error: "Malformed JSON request payload." });
+      }
+      next(err);
+    }
+  );
   app.get("/api/v1/health", (_req, res) => {
     res.json({ ok: true, service: "devmind-studio-core", timestamp: (/* @__PURE__ */ new Date()).toISOString() });
   });
@@ -28789,10 +28915,16 @@ async function startServer(options) {
     res.json({ presets: LLM_PROVIDER_PRESETS });
   });
   app.get("/api/v1/events", (req, res) => {
+    const queryToken = typeof req.query.token === "string" ? req.query.token.trim() : null;
+    const token = extractBearerToken(req) || queryToken;
+    if (!store.getSessionByToken(token)) {
+      return res.status(401).json({ error: "Authenticated session required for event stream." });
+    }
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache, no-transform");
     res.setHeader("Connection", "keep-alive");
     res.flushHeaders?.();
+    activeSseResponses.add(res);
     const sendEvent = (evt) => {
       res.write(`data: ${JSON.stringify(evt)}
 
@@ -28809,6 +28941,7 @@ async function startServer(options) {
     }, 25e3);
     req.on("close", () => {
       clearInterval(keepAlive);
+      activeSseResponses.delete(res);
       store.events.off("sync", sendEvent);
     });
   });
@@ -28909,10 +29042,19 @@ async function startServer(options) {
   app.post("/api/v1/projects", (req, res) => {
     try {
       const { name, description, localPath, files } = req.body ?? {};
-      if (!name || !Array.isArray(files) || files.length === 0) {
+      if (!name || typeof name !== "string" || !Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: "Project name and at least one file are required." });
       }
-      const project = store.createProject({ name, description, localPath, files });
+      const sanitizedFiles = files.map((f) => ({
+        path: assertSafeRepoFilePath(String(f?.path ?? "")),
+        content: typeof f?.content === "string" ? f.content : ""
+      }));
+      const project = store.createProject({
+        name: name.trim(),
+        description: typeof description === "string" ? description.trim() : void 0,
+        localPath: typeof localPath === "string" ? localPath.trim() : void 0,
+        files: sanitizedFiles
+      });
       res.status(201).json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Failed to create project" });
@@ -28932,7 +29074,8 @@ async function startServer(options) {
       if (typeof filePath !== "string" || typeof content !== "string") {
         return res.status(400).json({ error: "File path and content strings are required." });
       }
-      const project = store.upsertFile(req.params.id, filePath, content);
+      const safePath = assertSafeRepoFilePath(filePath);
+      const project = store.upsertFile(req.params.id, safePath, content);
       res.json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Failed to update file" });
@@ -28944,7 +29087,8 @@ async function startServer(options) {
       if (!filePath) {
         return res.status(400).json({ error: "File path is required." });
       }
-      const project = store.deleteFile(req.params.id, filePath);
+      const safePath = assertSafeRepoFilePath(filePath);
+      const project = store.deleteFile(req.params.id, safePath);
       res.json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : "Failed to delete file" });
@@ -29237,6 +29381,15 @@ async function startServer(options) {
       const boundPort = typeof address === "object" && address ? address.port : PORT;
       console.log(`DevMind Studio listening on http://${HOST}:${boundPort}`);
       resolve({ server, port: boundPort });
+    });
+    server.on("close", () => {
+      for (const sseRes of activeSseResponses) {
+        try {
+          sseRes.end();
+        } catch {
+        }
+      }
+      activeSseResponses.clear();
     });
     server.on("error", reject);
   });

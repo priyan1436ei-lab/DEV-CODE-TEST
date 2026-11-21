@@ -20,6 +20,7 @@ import type {
   TaskPriority,
   UsageLedger,
 } from '../types/devmind';
+import { ActiveTasksTimeline, computeTaskProgress } from './ActiveTasksTimeline';
 
 interface DashboardViewProps {
   projects: Project[];
@@ -34,6 +35,9 @@ interface DashboardViewProps {
   onReindex: () => Promise<void>;
   onExecuteExtensionCommand: (commandId: string) => Promise<void>;
   onOpenFileLine: (filePath: string, line: number) => void;
+  onOpenAgentPanel?: () => void;
+  onDecideApproval?: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
+  onCancelTask?: (taskId: string) => Promise<void>;
 }
 
 const PRIORITY_STYLES: Record<TaskPriority, { label: string; color: string }> = {
@@ -55,6 +59,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onReindex,
   onExecuteExtensionCommand,
   onOpenFileLine,
+  onOpenAgentPanel,
+  onDecideApproval,
+  onCancelTask,
 }) => {
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
   const [reindexing, setReindexing] = useState(false);
@@ -233,6 +240,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </button>
       </div>
 
+      {/* Active Agent Jobs Progress Bar & Multi-Step Timeline Widget */}
+      <ActiveTasksTimeline
+        tasks={tasks}
+        onNavigate={onNavigate}
+        onOpenFileLine={onOpenFileLine}
+        onOpenAgentPanel={onOpenAgentPanel}
+        onDecideApproval={onDecideApproval}
+        onCancelTask={onCancelTask}
+      />
+
       {/* Main Two-Column Section */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
         {/* Left Column: Repositories + Recent Engineering Tasks */}
@@ -327,12 +344,22 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="divide-y divide-[var(--border-hairline)]">
                 {filteredTasks.map((task) => {
                   const p = PRIORITY_STYLES[task.priority || 'medium'];
+                  const progress = computeTaskProgress(task);
+                  const barTone =
+                    task.status === 'completed'
+                      ? 'bg-[var(--status-success)]'
+                      : task.status === 'awaiting_approval'
+                      ? 'bg-[var(--status-warning)]'
+                      : task.status === 'failed'
+                      ? 'bg-[var(--status-danger)]'
+                      : 'bg-[var(--accent-primary)]';
+
                   return (
                     <div
                       key={task.id}
                       className="px-4 py-3 flex items-center justify-between gap-4 hover:bg-[var(--surface-hover)] transition-colors"
                     >
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <span className={`text-[11px] font-semibold uppercase font-mono ${p.color}`}>
                             {p.label}
@@ -342,17 +369,30 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                           </span>
                         </div>
                         <div className="text-[11px] text-[var(--ink-muted)] mt-0.5 font-mono tabular-nums">
-                          {task.status.replace('_', ' ')} · {task.changes.length} patch(es) ·{' '}
-                          {new Date(task.createdAt).toLocaleTimeString()}
+                          {task.status.replace('_', ' ')} · {progress.completedCount}/{progress.totalCount} steps ·{' '}
+                          {task.changes.length} patch(es) · {new Date(task.createdAt).toLocaleTimeString()}
                         </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => onNavigate('history')}
-                        className="text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] shrink-0"
-                      >
-                        Inspect
-                      </button>
+                      <div className="flex items-center gap-3 shrink-0">
+                        <div className="hidden sm:flex items-center gap-2 w-28">
+                          <div className="h-1.5 flex-1 rounded-full bg-[var(--surface-hover)] overflow-hidden">
+                            <div
+                              className={`h-full w-full origin-left rounded-full transition-transform duration-300 ${barTone}`}
+                              style={{ transform: `scaleX(${Math.max(0.04, progress.percent / 100)})` }}
+                            />
+                          </div>
+                          <span className="text-[11px] font-mono tabular-nums text-[var(--ink-secondary)] w-8 text-right">
+                            {progress.percent}%
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => onNavigate('history')}
+                          className="text-xs font-medium text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] shrink-0"
+                        >
+                          Inspect
+                        </button>
+                      </div>
                     </div>
                   );
                 })}

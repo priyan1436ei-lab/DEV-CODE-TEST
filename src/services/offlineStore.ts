@@ -8,45 +8,57 @@ import type {
   ExtensionHostSnapshot,
   GraphEdge,
   GraphNode,
+  LocalProfile,
   PermissionPolicyRule,
   Project,
   PublicUserSession,
   RepoFile,
   SearchHit,
   SecurityFinding,
+  SyncConflictRecord,
   TaskPriority,
   UsageLedger,
 } from '../types/devmind';
 import type { ProviderPreset } from './api';
 
 const DB_NAME = 'devmind-studio-offline';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 const STORE_PROJECTS = 'projects';
 const STORE_TASKS = 'tasks';
 const STORE_KV = 'kv';
 const STORE_QUEUE = 'mutationQueue';
+const STORE_PROFILES = 'profiles';
+const STORE_CHAT = 'chatHistory';
+const STORE_EXTENSIONS = 'extensions';
+const STORE_SETTINGS = 'settings';
+const STORE_CONFLICTS = 'syncConflicts';
+const STORE_SYNC_META = 'syncMeta';
+
+export interface OfflineMutationMeta {
+  id?: number;
+  idempotencyKey?: string;
+  status: 'pending-sync';
+  createdAt: string;
+  retryCount?: number;
+  nextRetryAt?: number;
+  lastError?: string;
+  baseCloudUpdatedAtMs?: number;
+}
 
 export type OfflineMutation =
-  | {
-      id?: number;
+  | (OfflineMutationMeta & {
       type: 'saveFile';
       projectId: string;
       path: string;
       content: string;
-      status: 'pending-sync';
-      createdAt: string;
-    }
-  | {
-      id?: number;
+    })
+  | (OfflineMutationMeta & {
       type: 'deleteFile';
       projectId: string;
       path: string;
-      status: 'pending-sync';
-      createdAt: string;
-    }
-  | {
-      id?: number;
+    })
+  | (OfflineMutationMeta & {
       type: 'createProject';
       body: {
         name: string;
@@ -55,25 +67,33 @@ export type OfflineMutation =
         files: Array<{ path: string; content: string }>;
       };
       tempProjectId: string;
-      status: 'pending-sync';
-      createdAt: string;
-    }
-  | {
-      id?: number;
+    })
+  | (OfflineMutationMeta & {
       type: 'updateTaskPriority';
       taskId: string;
       priority: TaskPriority;
-      status: 'pending-sync';
-      createdAt: string;
-    };
+    });
 
 type QueueListener = (count: number) => void;
 const queueListeners = new Set<QueueListener>();
+
+type ConflictListener = (conflicts: SyncConflictRecord[]) => void;
+const conflictListeners = new Set<ConflictListener>();
 
 function notifyQueueListeners(count: number) {
   for (const listener of queueListeners) {
     try {
       listener(count);
+    } catch {
+      // Ignore subscriber errors
+    }
+  }
+}
+
+function notifyConflictListeners(conflicts: SyncConflictRecord[]) {
+  for (const listener of conflictListeners) {
+    try {
+      listener(conflicts);
     } catch {
       // Ignore subscriber errors
     }
@@ -88,6 +108,14 @@ export function subscribeOfflineQueueCount(listener: QueueListener): () => void 
   };
 }
 
+export function subscribeSyncConflicts(listener: ConflictListener): () => void {
+  conflictListeners.add(listener);
+  void getSyncConflicts().then(listener).catch(() => {});
+  return () => {
+    conflictListeners.delete(listener);
+  };
+}
+
 let dbPromise: Promise<IDBDatabase> | null = null;
 
 function openOfflineDb(): Promise<IDBDatabase> {
@@ -98,19 +126,46 @@ function openOfflineDb(): Promise<IDBDatabase> {
 
   dbPromise = new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (event) => {
       const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
-        db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
+      const oldVersion = event.oldVersion ?? 0;
+
+      // Schema v1 base stores
+      if (oldVersion < 1) {
+        if (!db.objectStoreNames.contains(STORE_PROJECTS)) {
+          db.createObjectStore(STORE_PROJECTS, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_TASKS)) {
+          db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_KV)) {
+          db.createObjectStore(STORE_KV, { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains(STORE_QUEUE)) {
+          db.createObjectStore(STORE_QUEUE, { keyPath: 'id', autoIncrement: true });
+        }
       }
-      if (!db.objectStoreNames.contains(STORE_TASKS)) {
-        db.createObjectStore(STORE_TASKS, { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains(STORE_KV)) {
-        db.createObjectStore(STORE_KV, { keyPath: 'key' });
-      }
-      if (!db.objectStoreNames.contains(STORE_QUEUE)) {
-        db.createObjectStore(STORE_QUEUE, { keyPath: 'id', autoIncrement: true });
+
+      // Schema v2 migration: dedicated stores for local profiles, chat, extensions, settings, conflicts, and sync metadata
+      if (oldVersion < 2) {
+        if (!db.objectStoreNames.contains(STORE_PROFILES)) {
+          db.createObjectStore(STORE_PROFILES, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_CHAT)) {
+          db.createObjectStore(STORE_CHAT, { keyPath: 'projectId' });
+        }
+        if (!db.objectStoreNames.contains(STORE_EXTENSIONS)) {
+          db.createObjectStore(STORE_EXTENSIONS, { keyPath: 'scopeKey' });
+        }
+        if (!db.objectStoreNames.contains(STORE_SETTINGS)) {
+          db.createObjectStore(STORE_SETTINGS, { keyPath: 'key' });
+        }
+        if (!db.objectStoreNames.contains(STORE_CONFLICTS)) {
+          db.createObjectStore(STORE_CONFLICTS, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_SYNC_META)) {
+          db.createObjectStore(STORE_SYNC_META, { keyPath: 'key' });
+        }
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -251,25 +306,51 @@ export async function enqueueOfflineMutation(mutation: OfflineMutation): Promise
   const store = tx.objectStore(STORE_QUEUE);
   const all = (await idbRequest(store.getAll())) as OfflineMutation[];
 
-  // Coalesce consecutive saveFile edits to the same project/path so outbox stays compact
-  if (mutation.type === 'saveFile') {
-    for (const existing of all) {
-      if (
-        existing.id !== undefined &&
-        existing.type === 'saveFile' &&
-        existing.projectId === mutation.projectId &&
-        existing.path === mutation.path
-      ) {
-        store.delete(existing.id);
-      }
+  const idempotencyKey =
+    mutation.idempotencyKey ||
+    (mutation.type === 'saveFile'
+      ? `saveFile:${mutation.projectId}:${mutation.path}`
+      : mutation.type === 'deleteFile'
+      ? `deleteFile:${mutation.projectId}:${mutation.path}`
+      : mutation.type === 'updateTaskPriority'
+      ? `updateTaskPriority:${mutation.taskId}`
+      : `createProject:${mutation.tempProjectId}`);
+
+  // Prevent duplicate writes & coalesce consecutive edits to the same resource
+  for (const existing of all) {
+    if (existing.id === undefined) continue;
+    const sameIdempotency = existing.idempotencyKey && existing.idempotencyKey === idempotencyKey;
+    const sameSave =
+      mutation.type === 'saveFile' &&
+      existing.type === 'saveFile' &&
+      existing.projectId === mutation.projectId &&
+      existing.path === mutation.path;
+    const samePriority =
+      mutation.type === 'updateTaskPriority' &&
+      existing.type === 'updateTaskPriority' &&
+      existing.taskId === mutation.taskId;
+    if (sameIdempotency || sameSave || samePriority) {
+      store.delete(existing.id);
     }
   }
 
-  store.add(mutation);
+  store.add({
+    ...mutation,
+    idempotencyKey,
+    retryCount: mutation.retryCount ?? 0,
+  });
   await txDone(tx);
   const count = await getPendingMutationCount();
   notifyQueueListeners(count);
   return count;
+}
+
+export async function updatePendingMutation(mutation: OfflineMutation): Promise<void> {
+  if (mutation.id === undefined) return;
+  const db = await openOfflineDb();
+  const tx = db.transaction(STORE_QUEUE, 'readwrite');
+  tx.objectStore(STORE_QUEUE).put(mutation);
+  await txDone(tx);
 }
 
 export async function getPendingMutations(): Promise<OfflineMutation[]> {
@@ -306,6 +387,139 @@ export async function removePendingMutation(id: number): Promise<void> {
   await txDone(tx);
   const count = await getPendingMutationCount();
   notifyQueueListeners(count);
+}
+
+/* ============================================================================
+ * Schema v2 Dedicated Stores: Profiles, Conflicts, Sync Meta & Auto-Save Drafts
+ * ============================================================================ */
+
+export async function cacheLocalProfiles(profiles: LocalProfile[]): Promise<void> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_PROFILES, 'readwrite');
+    const store = tx.objectStore(STORE_PROFILES);
+    store.clear();
+    for (const p of profiles) {
+      if (p && typeof p.id === 'string' && p.id.length > 0) {
+        store.put(p);
+      }
+    }
+    await txDone(tx);
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function getCachedLocalProfiles(): Promise<LocalProfile[]> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_PROFILES, 'readonly');
+    const rows = (await idbRequest(tx.objectStore(STORE_PROFILES).getAll())) as LocalProfile[];
+    return Array.isArray(rows)
+      ? rows.sort((a, b) => b.lastActiveAt.localeCompare(a.lastActiveAt))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function saveSyncConflict(conflict: SyncConflictRecord): Promise<void> {
+  if (!conflict?.id) return;
+  const db = await openOfflineDb();
+  const tx = db.transaction(STORE_CONFLICTS, 'readwrite');
+  tx.objectStore(STORE_CONFLICTS).put(conflict);
+  await txDone(tx);
+  notifyConflictListeners(await getSyncConflicts());
+}
+
+export async function getSyncConflicts(): Promise<SyncConflictRecord[]> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_CONFLICTS, 'readonly');
+    const rows = (await idbRequest(tx.objectStore(STORE_CONFLICTS).getAll())) as SyncConflictRecord[];
+    return Array.isArray(rows)
+      ? rows.sort((a, b) => b.detectedAt.localeCompare(a.detectedAt))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function removeSyncConflict(id: string): Promise<void> {
+  const db = await openOfflineDb();
+  const tx = db.transaction(STORE_CONFLICTS, 'readwrite');
+  tx.objectStore(STORE_CONFLICTS).delete(id);
+  await txDone(tx);
+  notifyConflictListeners(await getSyncConflicts());
+}
+
+export async function setSyncMetaValue<T>(key: string, value: T): Promise<void> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_SYNC_META, 'readwrite');
+    tx.objectStore(STORE_SYNC_META).put({ key, value, updatedAt: new Date().toISOString() });
+    await txDone(tx);
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function getSyncMetaValue<T>(key: string): Promise<T | null> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_SYNC_META, 'readonly');
+    const row = (await idbRequest(tx.objectStore(STORE_SYNC_META).get(key))) as
+      | { key: string; value: T }
+      | undefined;
+    return row ? row.value : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function saveEditorDraft(
+  projectId: string,
+  filePath: string,
+  content: string
+): Promise<void> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+    tx.objectStore(STORE_SETTINGS).put({
+      key: `draft:${projectId}:${filePath}`,
+      value: { projectId, filePath, content, savedAt: new Date().toISOString() },
+    });
+    await txDone(tx);
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function getEditorDraft(
+  projectId: string,
+  filePath: string
+): Promise<{ content: string; savedAt: string } | null> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_SETTINGS, 'readonly');
+    const row = (await idbRequest(
+      tx.objectStore(STORE_SETTINGS).get(`draft:${projectId}:${filePath}`)
+    )) as { value?: { content: string; savedAt: string } } | undefined;
+    return row?.value ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function clearEditorDraft(projectId: string, filePath: string): Promise<void> {
+  try {
+    const db = await openOfflineDb();
+    const tx = db.transaction(STORE_SETTINGS, 'readwrite');
+    tx.objectStore(STORE_SETTINGS).delete(`draft:${projectId}:${filePath}`);
+    await txDone(tx);
+  } catch {
+    // Non-fatal
+  }
 }
 
 /* ============================================================================
@@ -814,10 +1028,33 @@ export const offlineCache = {
   getSession: () => getCachedKvValue<PublicUserSession>('session'),
   savePresets: (presets: ProviderPreset[]) => cacheKvValue('presets', presets),
   getPresets: () => getCachedKvValue<ProviderPreset[]>('presets'),
-  saveExtensionsHost: (projectId: string | undefined, host: ExtensionHostSnapshot) =>
-    cacheKvValue(`ext:${projectId || 'global'}`, host),
-  getExtensionsHost: (projectId?: string) =>
-    getCachedKvValue<ExtensionHostSnapshot>(`ext:${projectId || 'global'}`),
+  saveExtensionsHost: async (projectId: string | undefined, host: ExtensionHostSnapshot) => {
+    try {
+      const db = await openOfflineDb();
+      const tx = db.transaction(STORE_EXTENSIONS, 'readwrite');
+      tx.objectStore(STORE_EXTENSIONS).put({
+        scopeKey: projectId || 'global',
+        host,
+        updatedAt: new Date().toISOString(),
+      });
+      await txDone(tx);
+    } catch {
+      await cacheKvValue(`ext:${projectId || 'global'}`, host);
+    }
+  },
+  getExtensionsHost: async (projectId?: string) => {
+    try {
+      const db = await openOfflineDb();
+      const tx = db.transaction(STORE_EXTENSIONS, 'readonly');
+      const row = (await idbRequest(
+        tx.objectStore(STORE_EXTENSIONS).get(projectId || 'global')
+      )) as { host?: ExtensionHostSnapshot } | undefined;
+      if (row?.host) return row.host;
+    } catch {
+      // Fallback to v1 kv store
+    }
+    return getCachedKvValue<ExtensionHostSnapshot>(`ext:${projectId || 'global'}`);
+  },
   savePolicies: (policies: PermissionPolicyRule[]) => cacheKvValue('policies', policies),
   getPolicies: () => getCachedKvValue<PermissionPolicyRule[]>('policies'),
   saveUsage: (usage: UsageLedger) => cacheKvValue('usage', usage),
@@ -825,9 +1062,33 @@ export const offlineCache = {
   saveSecurity: (projectId: string, findings: SecurityFinding[]) =>
     cacheKvValue(`security:${projectId}`, findings),
   getSecurity: (projectId: string) => getCachedKvValue<SecurityFinding[]>(`security:${projectId}`),
-  saveChat: (projectId: string, messages: ChatMessage[]) =>
-    cacheKvValue(`chat:${projectId}`, messages),
-  getChat: (projectId: string) => getCachedKvValue<ChatMessage[]>(`chat:${projectId}`),
+  saveChat: async (projectId: string, messages: ChatMessage[]) => {
+    try {
+      const db = await openOfflineDb();
+      const tx = db.transaction(STORE_CHAT, 'readwrite');
+      tx.objectStore(STORE_CHAT).put({
+        projectId,
+        messages,
+        updatedAt: new Date().toISOString(),
+      });
+      await txDone(tx);
+    } catch {
+      await cacheKvValue(`chat:${projectId}`, messages);
+    }
+  },
+  getChat: async (projectId: string) => {
+    try {
+      const db = await openOfflineDb();
+      const tx = db.transaction(STORE_CHAT, 'readonly');
+      const row = (await idbRequest(tx.objectStore(STORE_CHAT).get(projectId))) as
+        | { messages?: ChatMessage[] }
+        | undefined;
+      if (Array.isArray(row?.messages)) return row.messages;
+    } catch {
+      // Fallback to v1 kv store
+    }
+    return getCachedKvValue<ChatMessage[]>(`chat:${projectId}`);
+  },
   saveAuditLogs: (logs: AuditLogEntry[]) => cacheKvValue('auditLogs', logs),
   getAuditLogs: () => getCachedKvValue<AuditLogEntry[]>('auditLogs'),
 };

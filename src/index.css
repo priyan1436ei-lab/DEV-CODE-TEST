@@ -166,3 +166,57 @@ textarea:focus-visible {
   border: 2px solid transparent;
   background-clip: content-box;
 }
+
+/* Sidebar File Tree Git-Status Pulse & Smooth Transitions */
+@keyframes git-status-row-pulse {
+  0% {
+    background-color: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent-primary);
+  }
+  45% {
+    background-color: rgba(255, 159, 10, 0.14);
+    box-shadow: inset 2px 0 0 var(--status-warning);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 transparent;
+  }
+}
+
+@keyframes git-badge-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  40% {
+    transform: scale(1.24);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.file-tree-item {
+  transition:
+    background-color 220ms var(--apple-ease),
+    color 180ms var(--apple-ease),
+    box-shadow 260ms var(--apple-ease);
+}
+
+.file-tree-git-pulse {
+  animation: git-status-row-pulse 900ms var(--apple-ease) 1;
+}
+
+.git-badge-pulse {
+  display: inline-flex;
+  animation: git-badge-pulse 650ms var(--apple-ease) 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .file-tree-git-pulse,
+  .git-badge-pulse {
+    animation: none !important;
+  }
+}

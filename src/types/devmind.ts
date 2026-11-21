@@ -7,6 +7,61 @@ export type LlmProviderId =
   | 'ollama'
   | 'custom';
 
+export type AiRoutingMode = 'auto' | 'online' | 'local';
+
+export type AiProvenance = 'online' | 'local-ollama' | 'local-rules';
+
+export interface LocalAiConfig {
+  host: string;
+  model: string;
+  enabled: boolean;
+}
+
+export interface OllamaModelInfo {
+  name: string;
+  sizeBytes?: number;
+  modifiedAt?: string;
+  parameterSize?: string;
+  quantizationLevel?: string;
+}
+
+export interface OllamaRuntimeStatus {
+  available: boolean;
+  host: string;
+  version?: string;
+  models: OllamaModelInfo[];
+  checkedAt: string;
+  error?: string;
+}
+
+export interface LocalProfile {
+  id: string;
+  displayName: string;
+  email: string;
+  hasPasscode: boolean;
+  linkedFirebaseUid?: string;
+  linkedFirebaseEmail?: string;
+  createdAt: string;
+  lastActiveAt: string;
+}
+
+export type SyncStateStatus = 'Synced' | 'Offline' | 'Pending' | 'Syncing' | 'Conflict' | 'Error';
+
+export type FirebaseConnectionStatus = 'connected' | 'local-only' | 'offline' | 'reauth-required';
+
+export interface SyncConflictRecord {
+  id: string;
+  entityType: 'project' | 'task' | 'extension' | 'profile';
+  entityId: string;
+  entityLabel: string;
+  localUpdatedAt: string;
+  cloudUpdatedAt: string;
+  localSummary: Record<string, unknown>;
+  cloudSummary: Record<string, unknown>;
+  mutationId?: number;
+  detectedAt: string;
+}
+
 export interface UserLlmConfig {
   provider: LlmProviderId;
   baseUrl: string;
@@ -19,6 +74,11 @@ export interface PublicUserSession {
   sessionId: string;
   displayName: string;
   email: string;
+  authMode?: 'local' | 'hybrid';
+  localProfileId?: string;
+  linkedFirebaseUid?: string;
+  aiRoutingMode?: AiRoutingMode;
+  localAi?: LocalAiConfig;
   llm: {
     provider: LlmProviderId;
     baseUrl: string;
@@ -290,6 +350,7 @@ export interface ChatMessage {
   content: string;
   citations?: CodeCitation[];
   modelUsed?: string;
+  provenance?: AiProvenance;
   tokensUsed?: number;
   costUsd?: number;
   redactedSecretsCount?: number;
@@ -318,6 +379,7 @@ export interface DebugAnalysis {
   explanation: string;
   proposedPatchPrompt: string;
   modelUsed: string;
+  provenance?: AiProvenance;
   tokensUsed: number;
   createdAt: string;
 }

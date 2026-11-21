@@ -25,8 +25,8 @@ export default defineConfig(() => {
           short_name: 'DevMind',
           description:
             'Desktop software engineering environment with offline IndexedDB code editing, extension host, and repository intelligence.',
-          theme_color: '#181818',
-          background_color: '#181818',
+          theme_color: '#1C1C1E',
+          background_color: '#1C1C1E',
           display: 'standalone',
           start_url: '/',
           scope: '/',
@@ -109,6 +109,40 @@ export default defineConfig(() => {
           type: 'module',
         },
       }),
+      {
+        name: 'disable-hmr-client-ws',
+        apply: 'serve',
+        enforce: 'post',
+        transform(code: string, id: string) {
+          if (
+            (id.includes('vite/dist/client/client.mjs') || id.includes('@vite/client')) &&
+            code.includes('transport.connect(')
+          ) {
+            const patched = code
+              .replace(
+                /transport\.connect\([^\n;]*\);/g,
+                '/* HMR WebSocket disabled in dev proxy environment */'
+              )
+              .replace(
+                /else throw new SendBeforeConnectError\("send was called before connect"\);/g,
+                'else return;'
+              )
+              .replace(
+                /else throw new SendBeforeConnectError\("invoke was called before connect"\);/g,
+                'else return;'
+              )
+              .replace(
+                /ws\.send\(JSON\.stringify\(data\)\);/g,
+                'if (ws && ws.readyState === ws.OPEN) ws.send(JSON.stringify(data));'
+              );
+            return {
+              code: patched,
+              map: null,
+            };
+          }
+          return null;
+        },
+      },
       {
         name: 'copy-unbundled-src-assets',
         apply: 'build',

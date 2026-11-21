@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { subscribeOfflineQueueCount } from '../services/offlineStore';
+import { setSyncOnlineStatus } from '../services/syncEngine';
 
 export function useOnlineStatus() {
   const [isOnline, setIsOnline] = useState(
@@ -8,11 +9,30 @@ export function useOnlineStatus() {
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    const update = (next: boolean) => {
+      setIsOnline(next);
+      setSyncOnlineStatus(next);
+    };
+
+    const handleOnline = () => update(true);
+    const handleOffline = () => update(false);
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+
+    // Electron desktop net.isOnline() monitoring
+    let unsubDesktopNet: (() => void) | undefined;
+    if (window.devmindDesktop?.isNetworkOnline) {
+      void window.devmindDesktop
+        .isNetworkOnline()
+        .then((desktopOnline) => update(Boolean(desktopOnline && navigator.onLine)))
+        .catch(() => {});
+    }
+    if (window.devmindDesktop?.onNetworkStatusChanged) {
+      unsubDesktopNet = window.devmindDesktop.onNetworkStatusChanged((desktopOnline) => {
+        update(Boolean(desktopOnline));
+      });
+    }
 
     const unsubscribeQueue = subscribeOfflineQueueCount((count) => {
       setPendingSyncCount(count);
@@ -21,6 +41,7 @@ export function useOnlineStatus() {
     return () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      unsubDesktopNet?.();
       unsubscribeQueue();
     };
   }, []);

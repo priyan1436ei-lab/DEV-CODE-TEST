@@ -5,7 +5,8 @@ import path from 'node:path';
 import { store, type RealtimeSyncEvent } from './server/agentOrchestrator.ts';
 import { LLM_PROVIDER_PRESETS } from './server/modelGateway.ts';
 import { hybridSearchRepository } from './server/repoBrain.ts';
-import type { LlmProviderId, TaskPriority, UserLlmConfig } from './src/types/devmind.ts';
+import type { AiRoutingMode, LlmProviderId, TaskPriority } from './src/types/devmind.ts';
+import type { HybridAiExecutionContext } from './server/aiRouter.ts';
 
 function extractBearerToken(req: express.Request): string | null {
   const header = req.headers.authorization;
@@ -14,19 +15,32 @@ function extractBearerToken(req: express.Request): string | null {
   return match ? match[1].trim() : null;
 }
 
-function getSessionLlmConfig(req: express.Request): UserLlmConfig {
+function assertSafeRepoFilePath(rawPath: string): string {
+  const normalized = rawPath.replace(/\\/g, '/').trim();
+  if (!normalized || normalized.length > 260) {
+    throw new Error('File path must be between 1 and 260 characters.');
+  }
+  if (normalized.includes('\0') || normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) {
+    throw new Error('Invalid file path: absolute paths and null bytes are not permitted.');
+  }
+  const segments = normalized.split('/');
+  if (segments.some((seg) => seg === '' || seg === '.' || seg === '..')) {
+    throw new Error('Invalid file path: relative traversal segments are not permitted.');
+  }
+  return normalized;
+}
+
+function getSessionAiContext(req: express.Request): HybridAiExecutionContext {
   const token = extractBearerToken(req);
   const session = store.getSessionByToken(token);
-  if (!session) {
-    return {
-      provider: 'openai',
-      baseUrl: '',
-      model: '',
-      apiKey: '',
-      configured: false,
-    };
-  }
-  return session.llm;
+  const clientOffline =
+    String(req.headers['x-devmind-network'] || '').toLowerCase() === 'offline' ||
+    Boolean(req.body?.clientOffline);
+  return store.buildAiContext(session, clientOffline);
+}
+
+export function flushServerState(): void {
+  store.flushToDisk();
 }
 
 export interface StartServerOptions {
@@ -46,8 +60,29 @@ export async function startServer(
   const app = express();
   const PORT = Number(options?.port ?? process.env.PORT ?? 3000);
   const HOST = options?.host || process.env.HOST || '0.0.0.0';
+  const activeSseResponses = new Set<express.Response>();
+
+  app.disable('x-powered-by');
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
 
   app.use(express.json({ limit: '10mb' }));
+  app.use(
+    (
+      err: unknown,
+      _req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (err instanceof SyntaxError && 'body' in (err as object)) {
+        return res.status(400).json({ error: 'Malformed JSON request payload.' });
+      }
+      next(err);
+    }
+  );
 
   // Health & Provider Presets
   app.get('/api/v1/health', (_req, res) => {
@@ -58,12 +93,19 @@ export async function startServer(
     res.json({ presets: LLM_PROVIDER_PRESETS });
   });
 
-  // Real-Time Server-Sent Events Sync Stream
+  // Real-Time Server-Sent Events Sync Stream (authenticated via Bearer header or ?token=)
   app.get('/api/v1/events', (req, res) => {
+    const queryToken = typeof req.query.token === 'string' ? req.query.token.trim() : null;
+    const token = extractBearerToken(req) || queryToken;
+    if (!store.getSessionByToken(token)) {
+      return res.status(401).json({ error: 'Authenticated session required for event stream.' });
+    }
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
+    activeSseResponses.add(res);
 
     const sendEvent = (evt: RealtimeSyncEvent) => {
       res.write(`data: ${JSON.stringify(evt)}\n\n`);
@@ -78,6 +120,7 @@ export async function startServer(
 
     req.on('close', () => {
       clearInterval(keepAlive);
+      activeSseResponses.delete(res);
       store.events.off('sync', sendEvent);
     });
   });
@@ -166,6 +209,75 @@ export async function startServer(
     }
   });
 
+  // Local Offline-First Profile Management (works with zero internet/Firebase)
+  app.get('/api/v1/local-profiles', (_req, res) => {
+    res.json({ profiles: store.localProfiles.listProfiles() });
+  });
+
+  app.post('/api/v1/local-profiles', (req, res) => {
+    try {
+      const { displayName, email, passcode, linkedFirebaseUid, linkedFirebaseEmail, autoUnlock } =
+        req.body ?? {};
+      const profile = store.localProfiles.createProfile({
+        displayName: String(displayName || ''),
+        email: typeof email === 'string' ? email : undefined,
+        passcode: typeof passcode === 'string' ? passcode : undefined,
+        linkedFirebaseUid: typeof linkedFirebaseUid === 'string' ? linkedFirebaseUid : undefined,
+        linkedFirebaseEmail: typeof linkedFirebaseEmail === 'string' ? linkedFirebaseEmail : undefined,
+      });
+
+      if (autoUnlock === false) {
+        return res.status(201).json({ profile });
+      }
+
+      const preset = LLM_PROVIDER_PRESETS[0];
+      const created = store.createSession({
+        displayName: profile.displayName,
+        email: profile.email,
+        authMode: profile.linkedFirebaseUid ? 'hybrid' : 'local',
+        localProfileId: profile.id,
+        linkedFirebaseUid: profile.linkedFirebaseUid,
+        llm: {
+          provider: preset.id,
+          baseUrl: preset.defaultBaseUrl,
+          model: preset.defaultModel,
+          apiKey: '',
+          configured: false,
+        },
+      });
+      res.status(201).json({ profile, ...created });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to create local profile' });
+    }
+  });
+
+  app.post('/api/v1/local-profiles/:id/unlock', (req, res) => {
+    try {
+      const passcode = typeof req.body?.passcode === 'string' ? req.body.passcode : undefined;
+      const profile = store.localProfiles.verifyAndTouchProfile(req.params.id, passcode);
+      const preset = LLM_PROVIDER_PRESETS[0];
+      const created = store.createSession({
+        displayName: profile.displayName,
+        email: profile.email,
+        authMode: profile.linkedFirebaseUid ? 'hybrid' : 'local',
+        localProfileId: profile.id,
+        linkedFirebaseUid: profile.linkedFirebaseUid,
+        llm: {
+          provider: preset.id,
+          baseUrl: preset.defaultBaseUrl,
+          model: preset.defaultModel,
+          apiKey: '',
+          configured: false,
+        },
+      });
+      res.status(200).json({ profile, ...created });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Failed to unlock local profile';
+      const status = msg.toLowerCase().includes('not found') ? 404 : 401;
+      res.status(status).json({ error: msg });
+    }
+  });
+
   app.post('/api/v1/auth/logout', (req, res) => {
     const token = extractBearerToken(req);
     if (token) store.deleteSession(token);
@@ -180,6 +292,70 @@ export async function startServer(
     }
     next();
   };
+
+  app.patch('/api/v1/local-profiles/:id/link-cloud', requireSession, (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token) return res.status(401).json({ error: 'Not authenticated' });
+      const firebaseUid = typeof req.body?.firebaseUid === 'string' ? req.body.firebaseUid : null;
+      const firebaseEmail = typeof req.body?.firebaseEmail === 'string' ? req.body.firebaseEmail : null;
+      const profile = store.localProfiles.linkFirebaseAccount(req.params.id, firebaseUid, firebaseEmail);
+      const session = store.linkSessionFirebase(token, firebaseUid, firebaseEmail);
+      res.json({ profile, session });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to link cloud account' });
+    }
+  });
+
+  app.delete('/api/v1/local-profiles/:id', requireSession, (req, res) => {
+    const deleted = store.localProfiles.deleteProfile(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Local profile not found.' });
+    }
+    res.json({ ok: true, profiles: store.localProfiles.listProfiles() });
+  });
+
+  // Local AI (Ollama) Detection & Hybrid AI Routing Controls
+  app.get('/api/v1/ai/local/status', requireSession, async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      const session = store.getSessionByToken(token);
+      const queryHost = typeof req.query.host === 'string' && req.query.host.trim()
+        ? req.query.host.trim()
+        : session?.localAi.host || store.defaultLocalAi.host;
+      const status = await store.aiRouter.ollama.getStatus(queryHost);
+      res.json({ status });
+    } catch (err) {
+      res.status(400).json({
+        status: {
+          available: false,
+          host: String(req.query.host || store.defaultLocalAi.host),
+          models: [],
+          checkedAt: new Date().toISOString(),
+          error: err instanceof Error ? err.message : 'Failed to probe Ollama runtime',
+        },
+      });
+    }
+  });
+
+  app.put('/api/v1/ai/routing', requireSession, (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token) return res.status(401).json({ error: 'Not authenticated' });
+      const { aiRoutingMode, localAi } = req.body ?? {};
+      const validMode: AiRoutingMode | undefined =
+        aiRoutingMode === 'auto' || aiRoutingMode === 'online' || aiRoutingMode === 'local'
+          ? aiRoutingMode
+          : undefined;
+      const session = store.updateAiRouting(token, {
+        aiRoutingMode: validMode,
+        localAi: localAi && typeof localAi === 'object' ? localAi : undefined,
+      });
+      res.json({ session });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update AI routing' });
+    }
+  });
 
   app.use('/api/v1/projects', requireSession);
   app.use('/api/v1/extensions', requireSession);
@@ -197,10 +373,19 @@ export async function startServer(
   app.post('/api/v1/projects', (req, res) => {
     try {
       const { name, description, localPath, files } = req.body ?? {};
-      if (!name || !Array.isArray(files) || files.length === 0) {
+      if (!name || typeof name !== 'string' || !Array.isArray(files) || files.length === 0) {
         return res.status(400).json({ error: 'Project name and at least one file are required.' });
       }
-      const project = store.createProject({ name, description, localPath, files });
+      const sanitizedFiles = files.map((f: { path?: unknown; content?: unknown }) => ({
+        path: assertSafeRepoFilePath(String(f?.path ?? '')),
+        content: typeof f?.content === 'string' ? f.content : '',
+      }));
+      const project = store.createProject({
+        name: name.trim(),
+        description: typeof description === 'string' ? description.trim() : undefined,
+        localPath: typeof localPath === 'string' ? localPath.trim() : undefined,
+        files: sanitizedFiles,
+      });
       res.status(201).json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to create project' });
@@ -222,7 +407,8 @@ export async function startServer(
       if (typeof filePath !== 'string' || typeof content !== 'string') {
         return res.status(400).json({ error: 'File path and content strings are required.' });
       }
-      const project = store.upsertFile(req.params.id, filePath, content);
+      const safePath = assertSafeRepoFilePath(filePath);
+      const project = store.upsertFile(req.params.id, safePath, content);
       res.json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update file' });
@@ -235,7 +421,8 @@ export async function startServer(
       if (!filePath) {
         return res.status(400).json({ error: 'File path is required.' });
       }
-      const project = store.deleteFile(req.params.id, filePath);
+      const safePath = assertSafeRepoFilePath(filePath);
+      const project = store.deleteFile(req.params.id, safePath);
       res.json({ project });
     } catch (err) {
       res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to delete file' });
@@ -375,11 +562,53 @@ export async function startServer(
       if (!question) {
         return res.status(400).json({ error: 'Message is required.' });
       }
-      const llmConfig = getSessionLlmConfig(req);
-      const reply = await store.repoChat(req.params.id, question, llmConfig);
+      const aiCtx = getSessionAiContext(req);
+      const reply = await store.repoChat(req.params.id, question, aiCtx);
       res.json({ reply, messages: store.chatHistories.get(req.params.id) ?? [] });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Repository chat failed' });
+    }
+  });
+
+  app.post('/api/v1/projects/:id/chat/stream', async (req, res) => {
+    const question = String(req.body?.message ?? '').trim();
+    if (!question) {
+      return res.status(400).json({ error: 'Message is required.' });
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const controller = new AbortController();
+    req.on('close', () => controller.abort());
+
+    try {
+      const aiCtx = getSessionAiContext(req);
+      const reply = await store.streamRepoChat(
+        req.params.id,
+        question,
+        aiCtx,
+        (token, provenance, modelUsed) => {
+          res.write(
+            `data: ${JSON.stringify({ type: 'chunk', token, provenance, modelUsed })}\n\n`
+          );
+        },
+        controller.signal
+      );
+      res.write(
+        `data: ${JSON.stringify({
+          type: 'done',
+          reply,
+          messages: store.chatHistories.get(req.params.id) ?? [],
+        })}\n\n`
+      );
+      res.end();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Streaming chat failed';
+      res.write(`data: ${JSON.stringify({ type: 'error', error: message })}\n\n`);
+      res.end();
     }
   });
 
@@ -399,8 +628,8 @@ export async function startServer(
       if (!errorLog) {
         return res.status(400).json({ error: 'Error log or stack trace is required.' });
       }
-      const llmConfig = getSessionLlmConfig(req);
-      const analysis = await store.analyzeDebugError(req.params.id, errorLog, llmConfig);
+      const aiCtx = getSessionAiContext(req);
+      const analysis = await store.analyzeDebugError(req.params.id, errorLog, aiCtx);
       res.json({ analysis });
     } catch (err) {
       res.status(500).json({ error: err instanceof Error ? err.message : 'Debug analysis failed' });
@@ -429,7 +658,7 @@ export async function startServer(
       }
       const validPriority: TaskPriority | undefined =
         priority === 'high' || priority === 'medium' || priority === 'low' ? priority : undefined;
-      const llmConfig = getSessionLlmConfig(req);
+      const aiCtx = getSessionAiContext(req);
       const task = await store.startAutonomousTask(
         {
           projectId,
@@ -438,7 +667,7 @@ export async function startServer(
           executionMode: executionMode === 'direct' ? 'direct' : 'approval',
           priority: validPriority,
         },
-        llmConfig
+        aiCtx
       );
       res.status(201).json({ task, project: store.getProject(projectId) });
     } catch (err) {
@@ -543,7 +772,7 @@ export async function startServer(
     const vitePkg = 'vite';
     const viteMod = (await import(/* @vite-ignore */ vitePkg)) as typeof import('vite');
     const vite = await viteMod.createServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -565,6 +794,17 @@ export async function startServer(
       const boundPort = typeof address === 'object' && address ? address.port : PORT;
       console.log(`DevMind Studio listening on http://${HOST}:${boundPort}`);
       resolve({ server, port: boundPort });
+    });
+    server.on('close', () => {
+      store.flushToDisk();
+      for (const sseRes of activeSseResponses) {
+        try {
+          sseRes.end();
+        } catch {
+          // ignore already-closed stream
+        }
+      }
+      activeSseResponses.clear();
     });
     server.on('error', reject);
   });

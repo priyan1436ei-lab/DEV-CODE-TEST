@@ -6,6 +6,8 @@ import { createTwoFilesPatch } from 'diff';
 import type {
   AgentStep,
   AgentTask,
+  AiProvenance,
+  AiRoutingMode,
   ApprovalRequest,
   AuditLogEntry,
   ChatMessage,
@@ -13,6 +15,7 @@ import type {
   CodeCitation,
   DebugAnalysis,
   ExtensionHostSnapshot,
+  LocalAiConfig,
   PermissionPolicyRule,
   Project,
   PublicUserSession,
@@ -21,11 +24,13 @@ import type {
   UsageLedger,
   UserLlmConfig,
 } from '../src/types/devmind.ts';
+import { HybridAiRouter, type HybridAiExecutionContext } from './aiRouter.ts';
 import {
   ExtensionHost,
   type CommandExecutionResult,
   type PersistedExtensionRecord,
 } from './extensionHost.ts';
+import { LocalProfileStore } from './localAuth.ts';
 import { estimateTaskCostUsd, maskApiKey, ModelGateway } from './modelGateway.ts';
 import { DEFAULT_PERMISSION_POLICIES, evaluatePolicy } from './policyEngine.ts';
 import { buildRepoFile, computeContentHash, hybridSearchRepository, indexRepository } from './repoBrain.ts';
@@ -41,6 +46,11 @@ export interface ServerSessionRecord {
   token: string;
   displayName: string;
   email: string;
+  authMode: 'local' | 'hybrid';
+  localProfileId?: string;
+  linkedFirebaseUid?: string;
+  aiRoutingMode: AiRoutingMode;
+  localAi: LocalAiConfig;
   llm: UserLlmConfig;
   createdAt: string;
 }
@@ -66,6 +76,7 @@ Always ground your analysis strictly in real file paths, symbol names, and line 
 
 export class DevMindStore {
   public gateway = new ModelGateway();
+  public aiRouter = new HybridAiRouter(this.gateway);
   public extensions = new ExtensionHost();
   public events = new EventEmitter();
   public sessions = new Map<string, ServerSessionRecord>();
@@ -75,19 +86,23 @@ export class DevMindStore {
   public debugAnalyses = new Map<string, DebugAnalysis[]>();
   public policies: PermissionPolicyRule[] = structuredClone(DEFAULT_PERMISSION_POLICIES);
   public auditLogs: AuditLogEntry[] = [];
-  private stateFilePath = DevMindStore.resolveStateFilePath();
+  public defaultAiRoutingMode: AiRoutingMode = 'auto';
+  public defaultLocalAi: LocalAiConfig = HybridAiRouter.defaultLocalConfig();
+  public localProfiles: LocalProfileStore;
+  private dataDir = DevMindStore.resolveDataDir();
+  private stateFilePath = path.join(this.dataDir, 'devmind-state.json');
 
-  private static resolveStateFilePath(customDataDir?: string): string {
-    const baseDir = customDataDir
+  private static resolveDataDir(customDataDir?: string): string {
+    return customDataDir
       ? path.resolve(customDataDir)
       : process.env.DEVMIND_DATA_DIR
       ? path.resolve(process.env.DEVMIND_DATA_DIR)
       : path.resolve(process.cwd(), 'data');
-    return path.join(baseDir, 'devmind-state.json');
   }
 
   constructor() {
     this.events.setMaxListeners(100);
+    this.localProfiles = new LocalProfileStore(this.dataDir);
     if (!this.loadPersistedState()) {
       this.seedInitialProjects();
       this.persistState();
@@ -98,11 +113,18 @@ export class DevMindStore {
     }
   }
 
+  public getDataDir(): string {
+    return this.dataDir;
+  }
+
   public reconfigureDataDir(dataDir: string): void {
-    const nextPath = DevMindStore.resolveStateFilePath(dataDir);
+    const nextDir = DevMindStore.resolveDataDir(dataDir);
+    const nextPath = path.join(nextDir, 'devmind-state.json');
     if (nextPath === this.stateFilePath) return;
+    this.dataDir = nextDir;
     this.stateFilePath = nextPath;
-    if (fs.existsSync(this.stateFilePath)) {
+    this.localProfiles.reconfigureDataDir(this.dataDir);
+    if (fs.existsSync(this.stateFilePath) || fs.existsSync(`${this.stateFilePath}.bak`)) {
       this.projects.clear();
       this.tasks.clear();
       this.chatHistories.clear();
@@ -116,10 +138,20 @@ export class DevMindStore {
     }
   }
 
+  public flushToDisk(): void {
+    this.persistState();
+    this.localProfiles.flush();
+  }
+
   private persistState(): void {
     try {
-      fs.mkdirSync(path.dirname(this.stateFilePath), { recursive: true });
+      const dir = path.dirname(this.stateFilePath);
+      fs.mkdirSync(dir, { recursive: true });
       const snapshot = {
+        schemaVersion: 2,
+        savedAt: new Date().toISOString(),
+        defaultAiRoutingMode: this.defaultAiRoutingMode,
+        defaultLocalAi: this.defaultLocalAi,
         projects: Array.from(this.projects.values()),
         tasks: Array.from(this.tasks.values()),
         chatHistories: Object.fromEntries(this.chatHistories.entries()),
@@ -129,75 +161,110 @@ export class DevMindStore {
         ledger: this.gateway.ledger,
         extensions: this.extensions.exportPersistedState(),
       };
-      fs.writeFileSync(this.stateFilePath, JSON.stringify(snapshot, null, 2), 'utf8');
+      const tmpPath = `${this.stateFilePath}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf8');
+      if (fs.existsSync(this.stateFilePath)) {
+        try {
+          fs.copyFileSync(this.stateFilePath, `${this.stateFilePath}.bak`);
+        } catch {
+          // Non-fatal backup error
+        }
+      }
+      fs.renameSync(tmpPath, this.stateFilePath);
     } catch {
       // Non-fatal if filesystem is read-only
     }
   }
 
   private loadPersistedState(): boolean {
-    try {
-      if (!fs.existsSync(this.stateFilePath)) return false;
-      const raw = fs.readFileSync(this.stateFilePath, 'utf8');
-      const data = JSON.parse(raw) as {
-        projects?: Project[];
-        tasks?: AgentTask[];
-        chatHistories?: Record<string, ChatMessage[]>;
-        debugAnalyses?: Record<string, DebugAnalysis[]>;
-        policies?: PermissionPolicyRule[];
-        auditLogs?: AuditLogEntry[];
-        ledger?: Partial<UsageLedger>;
-        extensions?: PersistedExtensionRecord[];
-      };
-      if (!Array.isArray(data.projects) || data.projects.length === 0) return false;
+    const candidates = [this.stateFilePath, `${this.stateFilePath}.bak`];
+    for (const candidate of candidates) {
+      try {
+        if (!fs.existsSync(candidate)) continue;
+        const raw = fs.readFileSync(candidate, 'utf8');
+        const data = JSON.parse(raw) as {
+          schemaVersion?: number;
+          defaultAiRoutingMode?: AiRoutingMode;
+          defaultLocalAi?: Partial<LocalAiConfig>;
+          projects?: Project[];
+          tasks?: AgentTask[];
+          chatHistories?: Record<string, ChatMessage[]>;
+          debugAnalyses?: Record<string, DebugAnalysis[]>;
+          policies?: PermissionPolicyRule[];
+          auditLogs?: AuditLogEntry[];
+          ledger?: Partial<UsageLedger>;
+          extensions?: PersistedExtensionRecord[];
+        };
+        if (!Array.isArray(data.projects) || data.projects.length === 0) continue;
 
-      for (const p of data.projects) {
-        // Strip any legacy test files from persisted sample projects
-        const cleanedFiles = p.files.filter((f) => !/(?:^|\/)tests\/|\.test\./i.test(f.path));
-        if (cleanedFiles.length !== p.files.length && cleanedFiles.length > 0) {
-          const reindexed = indexRepository(p.id, cleanedFiles);
-          p.files = reindexed.files;
-          p.symbols = reindexed.symbols;
-          p.chunks = reindexed.chunks;
-          p.architecture = reindexed.architecture;
+        if (
+          data.defaultAiRoutingMode === 'auto' ||
+          data.defaultAiRoutingMode === 'online' ||
+          data.defaultAiRoutingMode === 'local'
+        ) {
+          this.defaultAiRoutingMode = data.defaultAiRoutingMode;
         }
-        this.projects.set(p.id, p);
-        this.chatHistories.set(p.id, Array.isArray(data.chatHistories?.[p.id]) ? data.chatHistories[p.id] : []);
-        this.debugAnalyses.set(p.id, Array.isArray(data.debugAnalyses?.[p.id]) ? data.debugAnalyses[p.id] : []);
-      }
-      if (Array.isArray(data.tasks)) {
-        for (const t of data.tasks) {
-          t.priority =
-            t.priority === 'high' || t.priority === 'medium' || t.priority === 'low'
-              ? t.priority
-              : 'medium';
-          if ((t.status as string) === 'testing') t.status = 'completed';
-          if ((t.executionMode as string) === 'strict_sandbox') t.executionMode = 'direct';
-          this.tasks.set(t.id, t);
+        if (data.defaultLocalAi && typeof data.defaultLocalAi === 'object') {
+          this.defaultLocalAi = {
+            host: typeof data.defaultLocalAi.host === 'string' && data.defaultLocalAi.host.trim()
+              ? data.defaultLocalAi.host.trim()
+              : this.defaultLocalAi.host,
+            model: typeof data.defaultLocalAi.model === 'string' && data.defaultLocalAi.model.trim()
+              ? data.defaultLocalAi.model.trim()
+              : this.defaultLocalAi.model,
+            enabled: typeof data.defaultLocalAi.enabled === 'boolean' ? data.defaultLocalAi.enabled : true,
+          };
         }
-      }
-      if (Array.isArray(data.policies) && data.policies.length > 0) {
-        // Remove obsolete testing policy rules and ensure extension policy exists
-        const filtered = data.policies.filter((r) => r.actionType !== 'run_approved_tests');
-        if (!filtered.some((r) => r.actionType === 'install_extensions')) {
-          const extRule = DEFAULT_PERMISSION_POLICIES.find((r) => r.actionType === 'install_extensions');
-          if (extRule) filtered.splice(3, 0, extRule);
+
+        for (const p of data.projects) {
+          // Strip any legacy test files from persisted sample projects
+          const cleanedFiles = p.files.filter((f) => !/(?:^|\/)tests\/|\.test\./i.test(f.path));
+          if (cleanedFiles.length !== p.files.length && cleanedFiles.length > 0) {
+            const reindexed = indexRepository(p.id, cleanedFiles);
+            p.files = reindexed.files;
+            p.symbols = reindexed.symbols;
+            p.chunks = reindexed.chunks;
+            p.architecture = reindexed.architecture;
+          }
+          this.projects.set(p.id, p);
+          this.chatHistories.set(p.id, Array.isArray(data.chatHistories?.[p.id]) ? data.chatHistories[p.id] : []);
+          this.debugAnalyses.set(p.id, Array.isArray(data.debugAnalyses?.[p.id]) ? data.debugAnalyses[p.id] : []);
         }
-        this.policies = filtered;
+        if (Array.isArray(data.tasks)) {
+          for (const t of data.tasks) {
+            t.priority =
+              t.priority === 'high' || t.priority === 'medium' || t.priority === 'low'
+                ? t.priority
+                : 'medium';
+            if ((t.status as string) === 'testing') t.status = 'completed';
+            if ((t.executionMode as string) === 'strict_sandbox') t.executionMode = 'direct';
+            this.tasks.set(t.id, t);
+          }
+        }
+        if (Array.isArray(data.policies) && data.policies.length > 0) {
+          // Remove obsolete testing policy rules and ensure extension policy exists
+          const filtered = data.policies.filter((r) => r.actionType !== 'run_approved_tests');
+          if (!filtered.some((r) => r.actionType === 'install_extensions')) {
+            const extRule = DEFAULT_PERMISSION_POLICIES.find((r) => r.actionType === 'install_extensions');
+            if (extRule) filtered.splice(3, 0, extRule);
+          }
+          this.policies = filtered;
+        }
+        if (Array.isArray(data.auditLogs)) {
+          this.auditLogs = data.auditLogs.filter((l) => (l.eventType as string) !== 'SANDBOX_EXECUTED');
+        }
+        if (data.ledger) {
+          this.gateway.ledger = { ...this.gateway.ledger, ...data.ledger };
+        }
+        if (Array.isArray(data.extensions)) {
+          this.extensions.hydratePersistedState(data.extensions);
+        }
+        return true;
+      } catch {
+        // Attempt crash recovery from .bak snapshot if primary file is corrupted
       }
-      if (Array.isArray(data.auditLogs)) {
-        this.auditLogs = data.auditLogs.filter((l) => (l.eventType as string) !== 'SANDBOX_EXECUTED');
-      }
-      if (data.ledger) {
-        this.gateway.ledger = { ...this.gateway.ledger, ...data.ledger };
-      }
-      if (Array.isArray(data.extensions)) {
-        this.extensions.hydratePersistedState(data.extensions);
-      }
-      return true;
-    } catch {
-      return false;
     }
+    return false;
   }
 
   public emitSync(type: RealtimeSyncEvent['type'], projectId?: string): void {
@@ -214,14 +281,29 @@ export class DevMindStore {
     displayName: string;
     email: string;
     llm: UserLlmConfig;
+    authMode?: 'local' | 'hybrid';
+    localProfileId?: string;
+    linkedFirebaseUid?: string;
+    aiRoutingMode?: AiRoutingMode;
+    localAi?: Partial<LocalAiConfig>;
   }): { token: string; session: PublicUserSession } {
     const sessionId = uid('ses');
     const token = crypto.randomBytes(24).toString('hex');
+    const resolvedLocalAi: LocalAiConfig = {
+      host: input.localAi?.host?.trim() || this.defaultLocalAi.host,
+      model: input.localAi?.model?.trim() || this.defaultLocalAi.model,
+      enabled: typeof input.localAi?.enabled === 'boolean' ? input.localAi.enabled : this.defaultLocalAi.enabled,
+    };
     const record: ServerSessionRecord = {
       sessionId,
       token,
       displayName: input.displayName.trim() || 'Developer',
       email: input.email.trim() || 'developer@workspace.local',
+      authMode: input.authMode ?? (input.linkedFirebaseUid ? 'hybrid' : 'local'),
+      localProfileId: input.localProfileId,
+      linkedFirebaseUid: input.linkedFirebaseUid,
+      aiRoutingMode: input.aiRoutingMode ?? this.defaultAiRoutingMode,
+      localAi: resolvedLocalAi,
       llm: {
         provider: input.llm.provider,
         baseUrl: input.llm.baseUrl.trim(),
@@ -238,8 +320,8 @@ export class DevMindStore {
       resourceType: 'session',
       resourceId: sessionId,
       summary: record.llm.configured
-        ? `Signed in with provider endpoint (${record.llm.provider} · ${record.llm.model}).`
-        : 'Signed in using Local Workspace Mode (provider endpoint not yet connected).',
+        ? `Signed in (${record.authMode}) with provider endpoint (${record.llm.provider} · ${record.llm.model}).`
+        : `Signed in using Offline-First Local Workspace (${record.authMode}).`,
     });
     return { token, session: this.toPublicSession(record) };
   }
@@ -270,6 +352,88 @@ export class DevMindStore {
     return this.toPublicSession(rec);
   }
 
+  public updateAiRouting(
+    token: string,
+    input: {
+      aiRoutingMode?: AiRoutingMode;
+      localAi?: Partial<LocalAiConfig>;
+    }
+  ): PublicUserSession {
+    const rec = this.sessions.get(token);
+    if (!rec) throw new Error('Session expired or invalid. Please sign in again.');
+
+    if (
+      input.aiRoutingMode === 'auto' ||
+      input.aiRoutingMode === 'online' ||
+      input.aiRoutingMode === 'local'
+    ) {
+      rec.aiRoutingMode = input.aiRoutingMode;
+      this.defaultAiRoutingMode = input.aiRoutingMode;
+    }
+
+    if (input.localAi) {
+      rec.localAi = {
+        host: input.localAi.host?.trim() || rec.localAi.host,
+        model: input.localAi.model?.trim() || rec.localAi.model,
+        enabled: typeof input.localAi.enabled === 'boolean' ? input.localAi.enabled : rec.localAi.enabled,
+      };
+      this.defaultLocalAi = { ...rec.localAi };
+    }
+
+    this.logAudit({
+      actor: rec.email,
+      eventType: 'MODEL_CALL',
+      resourceType: 'session',
+      resourceId: rec.sessionId,
+      summary: `Updated AI routing -> mode=${rec.aiRoutingMode}, local=${rec.localAi.host} (${rec.localAi.model}).`,
+    });
+    this.emitSync('usage_updated');
+    return this.toPublicSession(rec);
+  }
+
+  public linkSessionFirebase(
+    token: string,
+    firebaseUid: string | null,
+    firebaseEmail?: string | null
+  ): PublicUserSession {
+    const rec = this.sessions.get(token);
+    if (!rec) throw new Error('Session expired or invalid. Please sign in again.');
+    rec.linkedFirebaseUid = firebaseUid?.trim() || undefined;
+    rec.authMode = rec.linkedFirebaseUid ? 'hybrid' : 'local';
+    if (rec.localProfileId) {
+      try {
+        this.localProfiles.linkFirebaseAccount(rec.localProfileId, firebaseUid, firebaseEmail);
+      } catch {
+        // Profile may have been removed; keep session consistent
+      }
+    }
+    this.emitSync('usage_updated');
+    return this.toPublicSession(rec);
+  }
+
+  public buildAiContext(session: ServerSessionRecord | null, clientOffline = false): HybridAiExecutionContext {
+    if (!session) {
+      return {
+        routingMode: this.defaultAiRoutingMode,
+        onlineConfig: {
+          provider: 'openai',
+          baseUrl: '',
+          model: '',
+          apiKey: '',
+          configured: false,
+        },
+        localConfig: { ...this.defaultLocalAi },
+        clientOffline,
+      };
+    }
+    return {
+      routingMode: session.aiRoutingMode,
+      onlineConfig: session.llm,
+      localConfig: session.localAi,
+      clientOffline,
+    };
+  }
+
   public deleteSession(token: string): void {
     this.sessions.delete(token);
   }
@@ -279,6 +443,11 @@ export class DevMindStore {
       sessionId: rec.sessionId,
       displayName: rec.displayName,
       email: rec.email,
+      authMode: rec.authMode,
+      localProfileId: rec.localProfileId,
+      linkedFirebaseUid: rec.linkedFirebaseUid,
+      aiRoutingMode: rec.aiRoutingMode,
+      localAi: { ...rec.localAi },
       llm: {
         provider: rec.llm.provider,
         baseUrl: rec.llm.baseUrl,
@@ -675,13 +844,75 @@ export class DevMindStore {
     };
   }
 
+  private normalizeAiContext(
+    llmOrCtx: UserLlmConfig | HybridAiExecutionContext
+  ): HybridAiExecutionContext {
+    if ('routingMode' in llmOrCtx && 'onlineConfig' in llmOrCtx) {
+      return llmOrCtx;
+    }
+    return {
+      routingMode: this.defaultAiRoutingMode,
+      onlineConfig: llmOrCtx,
+      localConfig: { ...this.defaultLocalAi },
+      clientOffline: false,
+    };
+  }
+
+  private buildDeterministicLocalChatReply(
+    project: Project,
+    question: string,
+    findings: SecurityFinding[],
+    redactedSecretsCount: number
+  ): ChatMessage {
+    const hits = hybridSearchRepository(question, project.chunks, project.architecture.edges, 6);
+    const citations: CodeCitation[] = hits.slice(0, 4).map((h) => ({
+      filePath: h.filePath,
+      startLine: h.startLine,
+      endLine: h.endLine,
+      symbolName: h.symbolName,
+    }));
+
+    const matchedLines =
+      hits.length > 0
+        ? hits
+            .slice(0, 4)
+            .map(
+              (h) =>
+                `- **\`${h.filePath}:${h.startLine}-${h.endLine}\`** (\`${h.symbolName}\`) — ${h.matchReason} (score ${h.score})`
+            )
+            .join('\n')
+        : '- No direct symbol hits found; try searching by function name, filename, or module keyword.';
+
+    const securitySummary =
+      findings.length > 0
+        ? `\n\n**Open Static Findings (${findings.length}):**\n${findings
+            .slice(0, 3)
+            .map((f) => `- [${f.severity.toUpperCase()}] \`${f.filePath}:${f.line}\` — ${f.title} (${f.cwe})`)
+            .join('\n')}`
+        : '';
+
+    return {
+      id: uid('msg'),
+      role: 'assistant',
+      content: `### Local AST Repository Analysis (${project.name})\n\nMatched **${hits.length}** indexed code block${hits.length === 1 ? '' : 's'} across ${project.architecture.totalFiles} files (${project.architecture.totalSymbols} AST symbols):\n\n${matchedLines}${securitySummary}\n\n_Generated locally via deterministic AST search (no online provider or local Ollama model active). Configure Ollama or an Online AI provider in Settings for generative responses._`,
+      citations,
+      modelUsed: 'local-ast/hybrid-search',
+      provenance: 'local-rules',
+      tokensUsed: 0,
+      costUsd: 0,
+      redactedSecretsCount,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   public async repoChat(
     projectId: string,
     question: string,
-    llmConfig: UserLlmConfig
+    llmOrCtx: UserLlmConfig | HybridAiExecutionContext
   ): Promise<ChatMessage> {
     const project = this.getProject(projectId);
     const history = this.chatHistories.get(project.id) ?? [];
+    const ctx = this.normalizeAiContext(llmOrCtx);
 
     const userMsg: ChatMessage = {
       id: uid('msg'),
@@ -715,8 +946,8 @@ export class DevMindStore {
     }
 
     try {
-      const res = await this.gateway.generateJson<ChatSchemaOut>({
-        config: llmConfig,
+      const res = await this.aiRouter.generateJson<ChatSchemaOut>({
+        ctx,
         operation: 'repo_chat',
         complexity: 'fast',
         systemInstruction: `${SECURITY_SYSTEM_PREAMBLE}
@@ -741,8 +972,125 @@ Answer the developer's question with crisp, evidence-based technical precision. 
         content: res.data.answerMarkdown || res.rawText,
         citations,
         modelUsed: `${res.provider}/${res.model}`,
+        provenance: res.provenance,
         tokensUsed: res.promptTokens + res.completionTokens,
         costUsd: res.costUsd,
+        redactedSecretsCount,
+        createdAt: new Date().toISOString(),
+      };
+      history.push(assistantMsg);
+      this.chatHistories.set(project.id, history.slice(-30));
+      this.emitSync('chat_updated', project.id);
+      this.emitSync('usage_updated');
+      return assistantMsg;
+    } catch (err) {
+      if (err instanceof Error && err.message === 'NO_AI_RUNTIME_AVAILABLE') {
+        const assistantMsg = this.buildDeterministicLocalChatReply(
+          project,
+          question,
+          findings,
+          redactedSecretsCount
+        );
+        history.push(assistantMsg);
+        this.chatHistories.set(project.id, history.slice(-30));
+        this.emitSync('chat_updated', project.id);
+        return assistantMsg;
+      }
+      history.pop();
+      throw err;
+    }
+  }
+
+  public async streamRepoChat(
+    projectId: string,
+    question: string,
+    ctx: HybridAiExecutionContext,
+    onChunk: (token: string, provenance: AiProvenance, modelUsed: string) => void,
+    signal?: AbortSignal
+  ): Promise<ChatMessage> {
+    const project = this.getProject(projectId);
+    const shouldStreamLocalOllama =
+      ctx.routingMode === 'local' ||
+      (ctx.routingMode === 'auto' &&
+        !this.aiRouter.isOnlineProviderReady(ctx) &&
+        (await this.aiRouter.isLocalOllamaReady(ctx)));
+
+    if (!shouldStreamLocalOllama) {
+      const reply = await this.repoChat(projectId, question, ctx);
+      const provenance: AiProvenance = reply.provenance ?? 'local-rules';
+      const modelUsed = reply.modelUsed ?? 'local-ast/hybrid-search';
+      onChunk(reply.content, provenance, modelUsed);
+      return reply;
+    }
+
+    const history = this.chatHistories.get(project.id) ?? [];
+    const userMsg: ChatMessage = {
+      id: uid('msg'),
+      role: 'user',
+      content: question,
+      createdAt: new Date().toISOString(),
+    };
+    history.push(userMsg);
+
+    const { contextBlock, redactedSecretsCount } = this.buildRepoContextPrompt(project, question, false);
+    const findings = this.getSecurityFindings(project.id);
+    const hits = hybridSearchRepository(question, project.chunks, project.architecture.edges, 4);
+    const citations: CodeCitation[] = hits.map((h) => ({
+      filePath: h.filePath,
+      startLine: h.startLine,
+      endLine: h.endLine,
+      symbolName: h.symbolName,
+    }));
+
+    const prompt = [
+      contextBlock,
+      findings.length > 0
+        ? `OPEN STATIC SECURITY FINDINGS:\n${findings.map((f) => `- [${f.severity.toUpperCase()}] ${f.filePath}:${f.line} ${f.title} (${f.cwe})`).join('\n')}`
+        : '',
+      `DEVELOPER QUESTION:\n${question}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+
+    try {
+      const modelLabel = `ollama/${ctx.localConfig.model}`;
+      const res = await this.aiRouter.ollama.streamChat({
+        host: ctx.localConfig.host,
+        model: ctx.localConfig.model,
+        messages: [
+          {
+            role: 'system',
+            content: `${SECURITY_SYSTEM_PREAMBLE}\nAnswer the developer's question directly in clear Markdown, citing real file paths and line numbers from the context.`,
+          },
+          { role: 'user', content: prompt },
+        ],
+        signal,
+        onToken: (tok) => onChunk(tok, 'local-ollama', modelLabel),
+      });
+
+      this.gateway.ledger.tokensUsed += res.promptTokens + res.completionTokens;
+      this.gateway.ledger.totalModelCalls += 1;
+      this.gateway.ledger.recentRecords.unshift({
+        id: `usg_loc_${Date.now().toString(36)}`,
+        timestamp: new Date().toISOString(),
+        provider: 'ollama',
+        model: res.model,
+        operation: 'repo_chat_stream',
+        promptTokens: res.promptTokens,
+        completionTokens: res.completionTokens,
+        costUsd: 0,
+        latencyMs: res.latencyMs,
+      });
+
+      const assistantMsg: ChatMessage = {
+        id: uid('msg'),
+        role: 'assistant',
+        content: res.text,
+        citations,
+        modelUsed: `ollama/${res.model}`,
+        provenance: 'local-ollama',
+        tokensUsed: res.promptTokens + res.completionTokens,
+        costUsd: 0,
         redactedSecretsCount,
         createdAt: new Date().toISOString(),
       };
@@ -757,12 +1105,79 @@ Answer the developer's question with crisp, evidence-based technical precision. 
     }
   }
 
+  private buildDeterministicLocalDebugAnalysis(project: Project, errorLog: string): DebugAnalysis {
+    const validPaths = new Set(project.files.map((f) => f.path));
+    const affectedFiles: CodeCitation[] = [];
+    const seenKey = new Set<string>();
+
+    const frameRegex = /([a-zA-Z0-9_./-]+\.[a-zA-Z0-9]+):(\d+)/g;
+    let match: RegExpExecArray | null;
+    while ((match = frameRegex.exec(errorLog)) !== null) {
+      const rawRef = match[1].replace(/^\.\//, '');
+      const lineNum = Math.max(1, Number(match[2]) || 1);
+      const matchedFile = project.files.find(
+        (f) => f.path === rawRef || f.path.endsWith(`/${rawRef}`) || rawRef.endsWith(f.path)
+      );
+      if (matchedFile && validPaths.has(matchedFile.path)) {
+        const sym = project.symbols.find(
+          (s) => s.filePath === matchedFile.path && lineNum >= s.startLine && lineNum <= s.endLine
+        );
+        const key = `${matchedFile.path}:${lineNum}`;
+        if (!seenKey.has(key)) {
+          seenKey.add(key);
+          affectedFiles.push({
+            filePath: matchedFile.path,
+            startLine: lineNum,
+            endLine: Math.min(matchedFile.lineCount, lineNum + 5),
+            symbolName: sym?.name || path.basename(matchedFile.path),
+          });
+        }
+      }
+    }
+
+    if (affectedFiles.length === 0) {
+      const hits = hybridSearchRepository(errorLog, project.chunks, project.architecture.edges, 4);
+      for (const h of hits) {
+        affectedFiles.push({
+          filePath: h.filePath,
+          startLine: h.startLine,
+          endLine: h.endLine,
+          symbolName: h.symbolName,
+        });
+      }
+    }
+
+    const firstLine = errorLog.split('\n').map((l) => l.trim()).find(Boolean) || 'Runtime error detected';
+    const primaryRef = affectedFiles[0]
+      ? `${affectedFiles[0].filePath}:${affectedFiles[0].startLine} (${affectedFiles[0].symbolName})`
+      : project.name;
+
+    return {
+      id: uid('dbg'),
+      projectId: project.id,
+      errorInput: errorLog,
+      rootCause: `${firstLine} — traced to ${primaryRef}`,
+      confidence: affectedFiles.length > 0 ? 'high' : 'medium',
+      explanation:
+        affectedFiles.length > 0
+          ? `Matched stack frame & AST symbols in ${affectedFiles.map((f) => `${f.filePath}:${f.startLine}`).join(', ')}. Validate null/undefined guards, input bounds, and return contracts around the referenced lines.`
+          : `Scanned ${project.architecture.totalFiles} files in Local Rules mode. Add an explicit file:line stack frame, start Ollama, or configure an Online AI provider for semantic trace analysis.`,
+      affectedFiles: affectedFiles.slice(0, 6),
+      proposedPatchPrompt: `Add defensive validation and fix "${firstLine}" in ${primaryRef}.`,
+      modelUsed: 'local-ast/stack-analyzer',
+      provenance: 'local-rules',
+      tokensUsed: 0,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   public async analyzeDebugError(
     projectId: string,
     errorLog: string,
-    llmConfig: UserLlmConfig
+    llmOrCtx: UserLlmConfig | HybridAiExecutionContext
   ): Promise<DebugAnalysis> {
     const project = this.getProject(projectId);
+    const ctx = this.normalizeAiContext(llmOrCtx);
     const { contextBlock } = this.buildRepoContextPrompt(project, errorLog, true);
 
     interface DebugSchemaOut {
@@ -778,14 +1193,15 @@ Answer the developer's question with crisp, evidence-based technical precision. 
       proposedPatchPrompt: string;
     }
 
-    const res = await this.gateway.generateJson<DebugSchemaOut>({
-      config: llmConfig,
-      operation: 'debug_root_cause',
-      complexity: 'deep',
-      systemInstruction: `${SECURITY_SYSTEM_PREAMBLE}
+    try {
+      const res = await this.aiRouter.generateJson<DebugSchemaOut>({
+        ctx,
+        operation: 'debug_root_cause',
+        complexity: 'deep',
+        systemInstruction: `${SECURITY_SYSTEM_PREAMBLE}
 You are acting as a Debugging Specialist. Analyze the provided stack trace or error log against the repository code. Pinpoint the exact root cause, affected lines, and a clear prompt to fix the defect.`,
-      prompt: `${contextBlock}\n\nERROR LOG / STACK TRACE:\n${errorLog}`,
-      jsonContractDescription: `{
+        prompt: `${contextBlock}\n\nERROR LOG / STACK TRACE:\n${errorLog}`,
+        jsonContractDescription: `{
   "rootCause": "string",
   "confidence": "high | medium | low",
   "explanation": "string",
@@ -794,35 +1210,46 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
   ],
   "proposedPatchPrompt": "string"
 }`,
-    });
+      });
 
-    const validPaths = new Set(project.files.map((f) => f.path));
-    const analysis: DebugAnalysis = {
-      id: uid('dbg'),
-      projectId: project.id,
-      errorInput: errorLog,
-      rootCause: res.data.rootCause || 'Root cause identified',
-      confidence:
-        res.data.confidence === 'high' || res.data.confidence === 'medium' || res.data.confidence === 'low'
-          ? res.data.confidence
-          : 'high',
-      explanation: res.data.explanation || '',
-      affectedFiles: (Array.isArray(res.data.affectedFiles) ? res.data.affectedFiles : []).filter(
-        (f) => f && validPaths.has(f.filePath)
-      ),
-      proposedPatchPrompt: res.data.proposedPatchPrompt || `Fix root cause: ${res.data.rootCause}`,
-      modelUsed: `${res.provider}/${res.model}`,
-      tokensUsed: res.promptTokens + res.completionTokens,
-      createdAt: new Date().toISOString(),
-    };
+      const validPaths = new Set(project.files.map((f) => f.path));
+      const analysis: DebugAnalysis = {
+        id: uid('dbg'),
+        projectId: project.id,
+        errorInput: errorLog,
+        rootCause: res.data.rootCause || 'Root cause identified',
+        confidence:
+          res.data.confidence === 'high' || res.data.confidence === 'medium' || res.data.confidence === 'low'
+            ? res.data.confidence
+            : 'high',
+        explanation: res.data.explanation || '',
+        affectedFiles: (Array.isArray(res.data.affectedFiles) ? res.data.affectedFiles : []).filter(
+          (f) => f && validPaths.has(f.filePath)
+        ),
+        proposedPatchPrompt: res.data.proposedPatchPrompt || `Fix root cause: ${res.data.rootCause}`,
+        modelUsed: `${res.provider}/${res.model}`,
+        provenance: res.provenance,
+        tokensUsed: res.promptTokens + res.completionTokens,
+        createdAt: new Date().toISOString(),
+      };
 
-    const existing = this.debugAnalyses.get(project.id) ?? [];
-    existing.unshift(analysis);
-    this.debugAnalyses.set(project.id, existing.slice(0, 15));
-    this.emitSync('debug_updated', project.id);
-    this.emitSync('usage_updated');
-
-    return analysis;
+      const existing = this.debugAnalyses.get(project.id) ?? [];
+      existing.unshift(analysis);
+      this.debugAnalyses.set(project.id, existing.slice(0, 15));
+      this.emitSync('debug_updated', project.id);
+      this.emitSync('usage_updated');
+      return analysis;
+    } catch (err) {
+      if (err instanceof Error && err.message === 'NO_AI_RUNTIME_AVAILABLE') {
+        const analysis = this.buildDeterministicLocalDebugAnalysis(project, errorLog);
+        const existing = this.debugAnalyses.get(project.id) ?? [];
+        existing.unshift(analysis);
+        this.debugAnalyses.set(project.id, existing.slice(0, 15));
+        this.emitSync('debug_updated', project.id);
+        return analysis;
+      }
+      throw err;
+    }
   }
 
   public async startAutonomousTask(
@@ -833,18 +1260,19 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
       executionMode?: 'approval' | 'direct';
       priority?: TaskPriority;
     },
-    llmConfig: UserLlmConfig
+    llmOrCtx: UserLlmConfig | HybridAiExecutionContext
   ): Promise<AgentTask> {
     const project = this.getProject(input.projectId);
+    const ctx = this.normalizeAiContext(llmOrCtx);
+    const llmConfig = ctx.onlineConfig;
     const taskId = uid('task');
     const now = new Date().toISOString();
 
     const { contextBlock, relevantFiles } = this.buildRepoContextPrompt(project, input.description, true);
-    const estCost = estimateTaskCostUsd(
-      contextBlock.length + input.description.length,
-      3200,
-      llmConfig.provider
-    );
+    const estCost =
+      ctx.routingMode === 'local'
+        ? 0
+        : estimateTaskCostUsd(contextBlock.length + input.description.length, 3200, llmConfig.provider);
 
     const inferredPriority: TaskPriority =
       input.priority === 'high' || input.priority === 'medium' || input.priority === 'low'
@@ -855,6 +1283,10 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
           ? 'high'
           : 'medium';
 
+    const initialProvider = ctx.routingMode === 'local' ? 'ollama' : llmConfig.provider;
+    const initialModel =
+      ctx.routingMode === 'local' ? ctx.localConfig.model : llmConfig.model || ctx.localConfig.model || 'unconfigured';
+
     const task: AgentTask = {
       id: taskId,
       projectId: project.id,
@@ -863,8 +1295,8 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
       status: 'planning',
       priority: inferredPriority,
       executionMode: input.executionMode ?? 'approval',
-      modelProvider: llmConfig.provider,
-      modelName: llmConfig.model || 'unconfigured',
+      modelProvider: initialProvider,
+      modelName: initialModel,
       estimatedCostUsd: estCost,
       actualCostUsd: 0,
       promptTokens: 0,
@@ -883,7 +1315,7 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
       eventType: 'TASK_CREATED',
       resourceType: 'agent_task',
       resourceId: task.id,
-      summary: `Created engineering task "${task.title}" via ${llmConfig.provider}/${llmConfig.model} (est. $${estCost.toFixed(5)}).`,
+      summary: `Created engineering task "${task.title}" (routing=${ctx.routingMode}, est. $${estCost.toFixed(5)}).`,
     });
 
     const addStep = (
@@ -951,8 +1383,8 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
         .filter(Boolean)
         .join('\n\n');
 
-      const planResult = await this.gateway.generateJson<AgentPatchPlan>({
-        config: llmConfig,
+      const planResult = await this.aiRouter.generateJson<AgentPatchPlan>({
+        ctx,
         operation: 'autonomous_plan_and_patch',
         complexity: 'deep',
         systemInstruction: SECURITY_SYSTEM_PREAMBLE,
@@ -967,6 +1399,8 @@ You are acting as a Debugging Specialist. Analyze the provided stack trace or er
 }`,
       });
 
+      task.modelProvider = planResult.provider;
+      task.modelName = planResult.model;
       task.promptTokens += planResult.promptTokens;
       task.completionTokens += planResult.completionTokens;
       task.actualCostUsd = Number((task.actualCostUsd + planResult.costUsd).toFixed(6));
