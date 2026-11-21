@@ -1,99 +1,33 @@
-**DevMind AI** is a Windows-focused desktop software engineering workbench with a VS Code-style interface. It combines repository editing, AI assistance, extensions, debugging, security analysis, and autonomous coding workflows.
-
-**Repository:** [priyan1436ei-lab/DEV-CODE-TEST](https://github.com/priyan1436ei-lab/DEV-CODE-TEST)
-
-## Highlights
-
-- Live code editor and project explorer
-- Repository-aware AI chat
-- AST-style architecture and dependency visualization
-- VS Code-style extensions marketplace
-- BYOK support for multiple LLM providers
-- Autonomous engineering tasks with approvals
-- Security scanning and policy controls
-- Offline editing with IndexedDB
-- Firebase synchronization
-- Progress billing and usage tracking
-- PWA support for browser use
-- Native Windows desktop builds through Electron
-- Real-time updates using Server-Sent Events
-
-## Main Technology
-
-- **React 19** and **TypeScript**
-- **Vite 8**
-- **Tailwind CSS 4**
-- **Electron**
-- **Express**
-- **Firebase / Firestore**
-- **IndexedDB**
-- **PWA / Workbox**
-
-## Architecture
-
-```text
-src/          React interface and application components
-server/       Repository brain, AI gateway, security, policies, and orchestration
-electron/     Native Windows desktop integration
-public/       Static assets and PWA resources
-desktop/      Desktop-specific resources
-scripts/      Build and packaging utilities
-.github/      GitHub Actions Windows build workflow
-```
-
-## Core Modules
-
-| Module | Purpose |
-|---|---|
-| `CodeEditorView` | VS Code-style code editing |
-| `RepoBrainView` | Repository search and architecture visualization |
-| `AiWorkspacePanel` | AI interaction workspace |
-| `ExtensionsView` | Extension marketplace and runtime |
-| `DebuggingCenterView` | Stack trace and error analysis |
-| `SecurityCenterView` | Security findings and recommendations |
-| `SettingsPolicyView` | Policies, model configuration, and billing |
-| `ExecutionHistoryView` | Engineering task history and rollback |
-| `DashboardView` | Project overview and activity |
-
-## Backend Services
-
-- Authentication and BYOK session management
-- Project and file operations
-- Repository indexing and hybrid search
-- AI repository chat
-- Model provider connections
-- Autonomous task orchestration
-- Approval and rollback workflows
-- Extension installation and command execution
-- Security finding generation
-- Policy enforcement
-- Usage and audit tracking
-- Real-time event synchronization
-
-## Local Development
-
-```bash
-npm install
-npm run dev
-```
-
-The application normally runs at `http://localhost:3000`. The default port can be configured in `.env.example`.
-
-## Windows Build
-
-```bash
-npm run build:win
-```
-
-A Windows executable can also be generated automatically through the GitHub Actions workflow.
-
-## Current Status
-
-- Public repository
-- Default branch: `main`
-- Primary language: TypeScript — 95.7%
-- JavaScript — 2.9%
-- Project version: `1.0.0`
-- No repository license specified
-- No README currently exists in the repository
-- No current open issues or pull requests are visible
+.
+├── .github/workflows/
+│   └── build-windows-exe.yml   # Automated Windows Electron build CI
+├── electron/                   # Electron main/preload processes & app icons
+├── desktop/                    # Additional desktop wrapper scripts
+├── public/                     # PWA icons, manifest assets, and demo GIFs
+├── scripts/
+│   ├── build-win-exe.ps1       # PowerShell Windows build script
+│   └── ensure-win-icon.mjs     # Automated Windows .ico generator/validator
+├── server/
+│   ├── agentOrchestrator.ts    # Multi-step AI agent loop & tool execution
+│   ├── extensionHost.ts        # Plugin/extension runtime
+│   ├── modelGateway.ts         # LLM provider routing
+│   ├── policyEngine.ts         # Workspace governance & rules
+│   ├── repoBrain.ts            # Codebase indexing & semantic context
+│   ├── sampleRepo.ts           # Built-in starter repository
+│   ├── sandboxRunner.ts        # Code execution sandbox
+│   └── securityEngine.ts       # Static/runtime security analyzer
+├── src/
+│   ├── components/             # Modular IDE views, modals, and panels
+│   ├── hooks/                  # useOnlineStatus, usePWAInstall
+│   ├── services/               # api.ts, firestoreSync.ts, offlineStore.ts
+│   ├── types/                  # devmind.ts, desktop.d.ts
+│   ├── App.tsx                 # Main application shell
+│   ├── firebase.ts             # Firebase client initialization
+│   └── index.css               # Global styles & UI animations
+├── server.ts                   # Backend server entrypoint
+├── firestore.rules             # Firestore database security rules
+├── firebase-blueprint.json     # Firebase schema/blueprint definition
+├── security_spec.md            # Security architecture specification
+├── electron-builder.yml        # Electron packaging configuration
+├── build-windows-exe.bat       # One-click Windows .exe build script
+└── vite.config.ts              # Vite & PWA build configuration
