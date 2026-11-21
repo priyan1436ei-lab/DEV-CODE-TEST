@@ -1,51 +1,99 @@
 import React from 'react';
-import { AlertTriangle, RotateCcw } from 'lucide-react';
+import { AlertTriangle, RefreshCw } from 'lucide-react';
+import { FIREBASE_PROJECT_ID, FIRESTORE_DATABASE_ID } from '../firebase';
 
-interface State {
+interface ErrorBoundaryState {
   hasError: boolean;
   message: string;
+  isQuotaError: boolean;
 }
 
-export class ErrorBoundary extends React.Component<{ children: React.ReactNode }, State> {
-  public state: State = { hasError: false, message: '' };
-
-  public static getDerivedStateFromError(error: Error): State {
-    return {
-      hasError: true,
-      message: error?.message || 'Unexpected workspace rendering error.',
+export class ErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  ErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode }) {
+    super(props);
+    this.state = {
+      hasError: false,
+      message: '',
+      isQuotaError: false,
     };
   }
 
-  public componentDidCatch(error: Error) {
-    console.error('DevMind UI ErrorBoundary:', error);
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    const raw = error?.message || 'Unexpected application error.';
+    const isQuotaError = raw.includes('Quota exceeded');
+    let friendly = raw;
+    try {
+      const parsed = JSON.parse(raw) as { error?: string; operationType?: string; path?: string };
+      if (parsed && parsed.error) {
+        friendly = `Firestore ${parsed.operationType || 'operation'} failed on ${parsed.path || 'database'}: ${parsed.error}`;
+      }
+    } catch {
+      // Plain error message
+    }
+    return {
+      hasError: true,
+      message: friendly,
+      isQuotaError,
+    };
   }
 
-  public render() {
-    if (this.state.hasError) {
-      return (
-        <div className="h-screen w-screen bg-[#090B10] text-[#E6E9F2] flex items-center justify-center p-6">
-          <div className="max-w-md w-full bg-[#10131C] border border-[#2B3347] rounded-[12px] p-6 space-y-4">
-            <div className="flex items-center gap-2.5 text-[#FF5468]">
-              <AlertTriangle className="w-5 h-5 shrink-0" />
-              <h1 className="text-[16px] font-semibold">Workspace Recovery</h1>
+  componentDidCatch(error: Error): void {
+    console.error('Application ErrorBoundary caught error:', error);
+  }
+
+  render() {
+    if (!this.state.hasError) {
+      return this.props.children;
+    }
+
+    const upgradeUrl = `https://console.firebase.google.com/project/${FIREBASE_PROJECT_ID}/firestore/databases/${FIRESTORE_DATABASE_ID}/data?openUpgradeDialog=true`;
+
+    return (
+      <div className="min-h-screen w-full bg-[var(--surface-chrome)] text-[var(--ink-primary)] flex items-center justify-center p-6">
+        <div className="w-full max-w-lg border border-[var(--border-strong)] rounded-[6px] bg-[var(--surface-elevated)] p-6 space-y-4 shadow-lg">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-[var(--status-danger)] shrink-0 mt-0.5" />
+            <div>
+              <h1 className="text-sm font-semibold text-[var(--ink-primary)]">
+                {this.state.isQuotaError ? 'Firestore Daily Quota Exceeded' : 'Workspace Recovery Needed'}
+              </h1>
+              <p className="text-xs text-[var(--ink-secondary)] mt-1 leading-relaxed break-words">
+                {this.state.message}
+              </p>
             </div>
-            <p className="text-[13px] text-[#A3AABF] leading-relaxed font-mono break-words">
-              {this.state.message}
-            </p>
+          </div>
+
+          {this.state.isQuotaError && (
+            <div className="p-3 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-xs text-[var(--ink-secondary)] space-y-1.5">
+              <p>
+                Free-tier daily Firestore read/write quotas reset the next day. Details are available under the Spark plan (Enterprise edition) at firebase.google.com/pricing#cloud-firestore.
+              </p>
+              <a
+                href={upgradeUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-block text-[var(--accent-primary)] hover:underline font-mono text-[11px]"
+              >
+                Open Firestore Database Upgrade Settings
+              </a>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--border-hairline)]">
             <button
-              onClick={() => {
-                this.setState({ hasError: false, message: '' });
-                window.location.reload();
-              }}
-              className="flex items-center gap-2 px-4 py-2 text-[13px] font-semibold bg-[#5B7CFF] hover:bg-[#7C96FF] text-[#090B10] rounded-[6px] transition-colors"
+              type="button"
+              onClick={() => window.location.reload()}
+              className="h-8 px-3.5 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] inline-flex items-center gap-1.5"
             >
-              <RotateCcw className="w-4 h-4" />
-              <span>Reload DevMind Studio</span>
+              <RefreshCw className="w-3.5 h-3.5" />
+              Reload Studio
             </button>
           </div>
         </div>
-      );
-    }
-    return this.props.children;
+      </div>
+    );
   }
 }

@@ -1,34 +1,51 @@
 import React, { useEffect, useState } from 'react';
+import type { User } from 'firebase/auth';
 import {
   AlertCircle,
   ArrowRight,
   Blocks,
   CheckCircle2,
+  Cloud,
   Code2,
   Eye,
   EyeOff,
   FolderGit2,
   KeyRound,
   Loader2,
+  LogOut,
   Monitor,
   ShieldCheck,
 } from 'lucide-react';
+import { signInWithGoogle, signOutFirebase } from '../firebase';
 import { devmindApi, type ProviderPreset } from '../services/api';
+import { ensureUserProfile, type FirestoreUserProfile } from '../services/firestoreSync';
 import type { LlmProviderId, PublicUserSession } from '../types/devmind';
 
 interface LoginGateProps {
-  onAuthenticated: (token: string, session: PublicUserSession) => void;
+  firebaseUser: User | null;
+  firebaseAuthReady: boolean;
+  onAuthenticated: (
+    token: string,
+    session: PublicUserSession,
+    profile?: FirestoreUserProfile | null
+  ) => void;
 }
 
-export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
+export const LoginGate: React.FC<LoginGateProps> = ({
+  firebaseUser,
+  firebaseAuthReady,
+  onAuthenticated,
+}) => {
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
-  const [displayName, setDisplayName] = useState('Developer');
-  const [email, setEmail] = useState('dev@workspace.local');
   const [provider, setProvider] = useState<LlmProviderId>('openai');
   const [baseUrl, setBaseUrl] = useState('https://api.openai.com/v1');
   const [model, setModel] = useState('gpt-4o-mini');
   const [apiKey, setApiKey] = useState('');
   const [showKey, setShowKey] = useState(false);
+
+  const [cloudProfile, setCloudProfile] = useState<FirestoreUserProfile | null>(null);
+  const [signingInGoogle, setSigningInGoogle] = useState(false);
+  const [loadingProfile, setLoadingProfile] = useState(false);
 
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{
@@ -46,16 +63,49 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
       .then((res) => {
         setPresets(res.presets);
         const first = res.presets[0];
-        if (first) {
+        if (first && !cloudProfile) {
           setProvider(first.id);
           setBaseUrl(first.defaultBaseUrl);
           setModel(first.defaultModel);
         }
       })
       .catch(() => {
-        // Fallback defaults remain usable if server is still warming up.
+        // Fallback defaults remain usable while backend warms up.
       });
   }, []);
+
+  // Hydrate saved Firestore user preferences whenever Google user signs in
+  useEffect(() => {
+    if (!firebaseUser) {
+      setCloudProfile(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingProfile(true);
+    setError(null);
+    ensureUserProfile(firebaseUser, {
+      preferredProvider: provider,
+      preferredModel: model,
+      preferredBaseUrl: baseUrl,
+    })
+      .then((profile) => {
+        if (cancelled) return;
+        setCloudProfile(profile);
+        setProvider(profile.preferredProvider);
+        setModel(profile.preferredModel);
+        setBaseUrl(profile.preferredBaseUrl);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : 'Unable to load Firestore profile.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingProfile(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [firebaseUser]);
 
   const currentPreset = presets.find((p) => p.id === provider);
 
@@ -67,6 +117,31 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
     if (preset) {
       setBaseUrl(preset.defaultBaseUrl);
       setModel(preset.defaultModel);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setSigningInGoogle(true);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Google Sign-In failed.';
+      if (!msg.includes('popup-closed-by-user')) {
+        setError(msg);
+      }
+    } finally {
+      setSigningInGoogle(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    setError(null);
+    try {
+      await signOutFirebase();
+      setCloudProfile(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to sign out.');
     }
   };
 
@@ -96,22 +171,26 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
     }
   };
 
-  const handleSubmit = async (localWorkspaceOnly: boolean) => {
+  const handleOpenStudio = async (localWorkspaceOnly: boolean) => {
+    if (!firebaseUser) {
+      setError('Please sign in with Google first so your workspace profile and cloud data are verified.');
+      return;
+    }
     setError(null);
     setSubmitting(true);
     try {
       const res = await devmindApi.login({
-        displayName: displayName.trim() || 'Developer',
-        email: email.trim() || 'dev@workspace.local',
+        displayName: firebaseUser.displayName || cloudProfile?.displayName || 'Developer',
+        email: firebaseUser.email || cloudProfile?.email || 'dev@workspace.local',
         provider,
         baseUrl: baseUrl.trim(),
         model: model.trim(),
         apiKey: localWorkspaceOnly ? '' : apiKey.trim(),
         localWorkspaceOnly,
       });
-      onAuthenticated(res.token, res.session);
+      onAuthenticated(res.token, res.session, cloudProfile);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
+      setError(err instanceof Error ? err.message : 'Workspace session startup failed.');
     } finally {
       setSubmitting(false);
     }
@@ -131,15 +210,21 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
           <span className="text-[11px] text-[var(--ink-muted)] font-mono">v2.1.0 · Windows x64</span>
         </div>
 
-        <div className="flex items-center gap-2 text-[11px] text-[var(--ink-muted)] win-no-drag">
-          <Monitor className="w-3.5 h-3.5" />
-          <span>Local Desktop Runtime</span>
+        <div className="flex items-center gap-3 text-[11px] text-[var(--ink-muted)] win-no-drag">
+          <span className="inline-flex items-center gap-1">
+            <Cloud className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+            Firebase Auth & Firestore
+          </span>
+          <span className="hidden sm:inline-flex items-center gap-1">
+            <Monitor className="w-3.5 h-3.5" />
+            Local Desktop Runtime
+          </span>
         </div>
       </header>
 
       {/* Main Split Content */}
       <main className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-[960px] grid grid-cols-1 lg:grid-cols-12 border border-[var(--border-hairline)] rounded-[6px] bg-[var(--surface-canvas)] overflow-hidden shadow-sm">
+        <div className="w-full max-w-[980px] grid grid-cols-1 lg:grid-cols-12 border border-[var(--border-hairline)] rounded-[6px] bg-[var(--surface-canvas)] overflow-hidden shadow-sm">
           {/* Left Product Overview Pane */}
           <div className="lg:col-span-5 p-8 bg-[var(--surface-sidebar)] border-b lg:border-b-0 lg:border-r border-[var(--border-hairline)] flex flex-col justify-between gap-8">
             <div className="space-y-4">
@@ -147,13 +232,25 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
                 Desktop Engineering Environment
               </div>
               <h1 className="text-2xl font-semibold tracking-tight text-[var(--ink-primary)] leading-tight">
-                Code editor, extension host, and repository governance in one workspace.
+                Sign in with Google to sync your IDE, extensions, and tasks.
               </h1>
               <p className="text-xs text-[var(--ink-secondary)] leading-relaxed">
-                Connect your preferred OpenAI-compatible, Anthropic, or local Ollama endpoint — or open the local workspace immediately to edit files, run extensions, and inspect architecture.
+                Your workspace preferences, installed extensions, task priorities, and repository metadata persist securely in Cloud Firestore under your Google identity while model API keys remain strictly local in memory.
               </p>
 
               <div className="pt-3 space-y-3 border-t border-[var(--border-hairline)]">
+                <div className="flex items-start gap-2.5">
+                  <Cloud className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-xs font-semibold text-[var(--ink-primary)]">
+                      Per-User Cloud Firestore Persistence
+                    </div>
+                    <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
+                      Strict owner-isolated security rules sync your profile, extension states, tasks, and projects across sessions.
+                    </p>
+                  </div>
+                </div>
+
                 <div className="flex items-start gap-2.5">
                   <Blocks className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
                   <div>
@@ -173,7 +270,7 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
                       AST Repository Indexing & Live Sync
                     </div>
                     <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      Direct disk persistence, dependency graph inspection, and unified diff review with one-click rollback.
+                      Dependency graph inspection, unified diff review, and one-click rollback snapshots.
                     </p>
                   </div>
                 </div>
@@ -182,10 +279,10 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
                   <ShieldCheck className="w-4 h-4 text-[var(--accent-primary)] shrink-0 mt-0.5" />
                   <div>
                     <div className="text-xs font-semibold text-[var(--ink-primary)]">
-                      Bring Your Own Model Key
+                      Zero-Secret Cloud Storage
                     </div>
                     <p className="text-[11px] text-[var(--ink-secondary)] mt-0.5">
-                      Credentials remain in server session memory only and are never exposed in client bundles or logs.
+                      BYOK LLM API keys are never written to Firestore — they stay strictly in server session memory.
                     </p>
                   </div>
                 </div>
@@ -200,133 +297,194 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
 
           {/* Right Sign-In & Provider Configuration Form */}
           <div className="lg:col-span-7 p-8 space-y-5">
-            <div>
-              <h2 className="text-base font-semibold text-[var(--ink-primary)]">
-                Workspace Sign-In & Model Endpoint
-              </h2>
-              <p className="text-xs text-[var(--ink-secondary)] mt-1">
-                Configure your provider key for code patching and repository queries, or continue offline in Local Workspace mode.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+            {/* Step 1: Google Sign-In Identity */}
+            <div className="space-y-3">
               <div>
-                <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
-                  Display Name
-                </label>
-                <input
-                  type="text"
-                  value={displayName}
-                  onChange={(e) => setDisplayName(e.target.value)}
-                  className="w-full h-9 px-3 text-xs rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
-                  Workspace Email
-                </label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className="w-full h-9 px-3 text-xs rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
-              </div>
-            </div>
-
-            {/* Provider Selector */}
-            <div>
-              <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1.5">
-                Model Provider
-              </label>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
-                {(presets.length > 0
-                  ? presets
-                  : [
-                      { id: 'openai' as LlmProviderId, name: 'OpenAI' },
-                      { id: 'anthropic' as LlmProviderId, name: 'Anthropic' },
-                      { id: 'openrouter' as LlmProviderId, name: 'OpenRouter' },
-                      { id: 'ollama' as LlmProviderId, name: 'Ollama' },
-                    ]
-                ).map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => handleSelectProvider(item.id)}
-                    className={`h-8 px-2.5 text-xs font-medium rounded-[4px] border text-left truncate transition-colors ${
-                      provider === item.id
-                        ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
-                        : 'border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
-                    }`}
-                  >
-                    {item.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <div>
-                <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
-                  API Base URL
-                </label>
-                <input
-                  type="url"
-                  value={baseUrl}
-                  onChange={(e) => setBaseUrl(e.target.value)}
-                  placeholder="https://api.openai.com/v1"
-                  className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
+                <h2 className="text-base font-semibold text-[var(--ink-primary)]">
+                  1. Verify Account with Google
+                </h2>
+                <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
+                  Authenticate via Firebase Auth to unlock your private Firestore workspace data.
+                </p>
               </div>
 
-              <div>
-                <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
-                  Model Identifier
-                </label>
-                <input
-                  type="text"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  list="provider-model-suggestions"
-                  placeholder="gpt-4o-mini"
-                  className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
-                {currentPreset && (
-                  <datalist id="provider-model-suggestions">
-                    {currentPreset.suggestedModels.map((m) => (
-                      <option key={m} value={m} />
-                    ))}
-                  </datalist>
-                )}
-              </div>
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] font-medium text-[var(--ink-secondary)] inline-flex items-center gap-1">
-                  <KeyRound className="w-3 h-3" />
-                  Provider API Key
-                </label>
-                <span className="text-[11px] text-[var(--ink-muted)]">
-                  {currentPreset?.requiresKey === false ? 'Optional for local Ollama' : 'Stored in session memory'}
-                </span>
-              </div>
-              <div className="relative">
-                <input
-                  type={showKey ? 'text' : 'password'}
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={currentPreset?.requiresKey === false ? 'Not required for local server' : 'sk-...'}
-                  className="w-full h-9 pl-3 pr-9 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
-                />
+              {!firebaseAuthReady ? (
+                <div className="h-11 px-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] flex items-center gap-2 text-xs text-[var(--ink-secondary)]">
+                  <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-primary)]" />
+                  Checking Firebase authentication state...
+                </div>
+              ) : !firebaseUser ? (
                 <button
                   type="button"
-                  onClick={() => setShowKey((v) => !v)}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--ink-muted)] hover:text-[var(--ink-primary)]"
-                  title={showKey ? 'Hide key' : 'Show key'}
+                  disabled={signingInGoogle}
+                  onClick={handleGoogleSignIn}
+                  className="w-full h-11 px-4 rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] hover:bg-[var(--surface-hover)] text-[var(--ink-primary)] text-xs font-semibold flex items-center justify-center gap-2.5 transition-colors disabled:opacity-50"
                 >
-                  {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  {signingInGoogle ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-[var(--accent-primary)]" />
+                  ) : (
+                    <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                      <path
+                        fill="#4285F4"
+                        d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                      />
+                      <path
+                        fill="#34A853"
+                        d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                      />
+                      <path
+                        fill="#FBBC05"
+                        d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                      />
+                      <path
+                        fill="#EA4335"
+                        d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                      />
+                    </svg>
+                  )}
+                  <span>{signingInGoogle ? 'Opening Google Sign-In...' : 'Sign in with Google'}</span>
                 </button>
+              ) : (
+                <div className="p-3 rounded-[4px] border border-[var(--status-success)]/40 bg-[var(--surface-elevated)] flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    {firebaseUser.photoURL ? (
+                      <img
+                        src={firebaseUser.photoURL}
+                        alt={firebaseUser.displayName || 'Google account'}
+                        referrerPolicy="no-referrer"
+                        className="w-8 h-8 rounded-full border border-[var(--border-hairline)] shrink-0"
+                      />
+                    ) : (
+                      <div className="w-8 h-8 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-xs font-semibold shrink-0">
+                        {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-[var(--ink-primary)] truncate flex items-center gap-1.5">
+                        <span>{firebaseUser.displayName || 'Verified User'}</span>
+                        <CheckCircle2 className="w-3.5 h-3.5 text-[var(--status-success)] shrink-0" />
+                      </div>
+                      <div className="text-[11px] font-mono text-[var(--ink-muted)] truncate">
+                        {firebaseUser.email} {loadingProfile ? '· Syncing Firestore...' : '· Firestore Connected'}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleGoogleSignOut}
+                    className="h-7 px-2.5 text-[11px] rounded-[3px] border border-[var(--border-hairline)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1 shrink-0"
+                  >
+                    <LogOut className="w-3 h-3" />
+                    Switch
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Optional BYOK LLM Endpoint */}
+            <div className="pt-4 border-t border-[var(--border-hairline)] space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-[var(--ink-primary)]">
+                  2. Model Provider Endpoint (Optional)
+                </h2>
+                <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
+                  Configure your BYOK endpoint for automated patching and repository queries, or launch directly in Local Workspace mode.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1.5">
+                  Model Provider
+                </label>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-1.5">
+                  {(presets.length > 0
+                    ? presets
+                    : [
+                        { id: 'openai' as LlmProviderId, name: 'OpenAI' },
+                        { id: 'anthropic' as LlmProviderId, name: 'Anthropic' },
+                        { id: 'openrouter' as LlmProviderId, name: 'OpenRouter' },
+                        { id: 'ollama' as LlmProviderId, name: 'Ollama' },
+                      ]
+                  ).map((item) => (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => handleSelectProvider(item.id)}
+                      className={`h-8 px-2.5 text-xs font-medium rounded-[4px] border text-left truncate transition-colors ${
+                        provider === item.id
+                          ? 'border-[var(--accent-primary)] bg-[var(--accent-soft)] text-[var(--accent-primary)]'
+                          : 'border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                      }`}
+                    >
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                <div>
+                  <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
+                    API Base URL
+                  </label>
+                  <input
+                    type="url"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder="https://api.openai.com/v1"
+                    className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-medium text-[var(--ink-secondary)] mb-1">
+                    Model Identifier
+                  </label>
+                  <input
+                    type="text"
+                    value={model}
+                    onChange={(e) => setModel(e.target.value)}
+                    list="provider-model-suggestions"
+                    placeholder="gpt-4o-mini"
+                    className="w-full h-9 px-3 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                  {currentPreset && (
+                    <datalist id="provider-model-suggestions">
+                      {currentPreset.suggestedModels.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                  )}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-medium text-[var(--ink-secondary)] inline-flex items-center gap-1">
+                    <KeyRound className="w-3 h-3" />
+                    Provider API Key
+                  </label>
+                  <span className="text-[11px] text-[var(--ink-muted)]">
+                    {currentPreset?.requiresKey === false ? 'Optional for local Ollama' : 'Session memory only · Never saved to cloud'}
+                  </span>
+                </div>
+                <div className="relative">
+                  <input
+                    type={showKey ? 'text' : 'password'}
+                    value={apiKey}
+                    onChange={(e) => setApiKey(e.target.value)}
+                    placeholder={currentPreset?.requiresKey === false ? 'Not required for local server' : 'sk-...'}
+                    className="w-full h-9 pl-3 pr-9 text-xs font-mono rounded-[4px] bg-[var(--surface-elevated)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowKey((v) => !v)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[var(--ink-muted)] hover:text-[var(--ink-primary)]"
+                    title={showKey ? 'Hide key' : 'Show key'}
+                  >
+                    {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -350,14 +508,14 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
             {error && (
               <div className="px-3 py-2 rounded-[4px] border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{error}</span>
+                <span className="break-words">{error}</span>
               </div>
             )}
 
             <div className="pt-2 flex flex-wrap items-center justify-between gap-2.5 border-t border-[var(--border-hairline)]">
               <button
                 type="button"
-                disabled={testing || submitting}
+                disabled={testing || submitting || !firebaseUser}
                 onClick={handleVerifyConnection}
                 className="h-9 px-3.5 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
               >
@@ -368,8 +526,8 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  disabled={submitting}
-                  onClick={() => handleSubmit(true)}
+                  disabled={submitting || !firebaseUser || loadingProfile}
+                  onClick={() => handleOpenStudio(true)}
                   className="h-9 px-3.5 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 transition-colors"
                 >
                   Open Local Workspace
@@ -377,8 +535,8 @@ export const LoginGate: React.FC<LoginGateProps> = ({ onAuthenticated }) => {
 
                 <button
                   type="button"
-                  disabled={submitting}
-                  onClick={() => handleSubmit(false)}
+                  disabled={submitting || !firebaseUser || loadingProfile}
+                  onClick={() => handleOpenStudio(false)}
                   className="h-9 px-4 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
                 >
                   {submitting ? (

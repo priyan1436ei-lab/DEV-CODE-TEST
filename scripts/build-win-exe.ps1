@@ -13,7 +13,7 @@ Write-Host "[3/4] Building optimized Vite production bundle..." -ForegroundColor
 npm run build
 
 Write-Host "[4/4] Packaging Windows NSIS Installer & Portable .exe..." -ForegroundColor Green
-npx electron-builder --win --x64 --config electron-builder.yml
+npx electron-builder --win --x64 --config electron-builder.yml --publish never
 
 Write-Host "`nBuild complete. Standalone Windows installers:" -ForegroundColor Green
 Get-ChildItem -Path ".\dist-electron" -Filter "*.exe" | Select-Object Name, @{Name="SizeMB";Expression={[math]::Round($_.Length/1MB, 2)}}, LastWriteTime

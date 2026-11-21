@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { onAuthStateChanged, type User } from 'firebase/auth';
 import {
   AlertCircle,
   AlertTriangle,
   Blocks,
   Bug,
+  Cloud,
   Code2,
   FileCode2,
   FolderGit2,
@@ -39,12 +41,29 @@ import { LoginGate } from './components/LoginGate';
 import { RepoBrainView } from './components/RepoBrainView';
 import { SecurityCenterView } from './components/SecurityCenterView';
 import { SettingsPolicyView } from './components/SettingsPolicyView';
+import { auth, signOutFirebase } from './firebase';
 import {
   devmindApi,
   getStoredSessionToken,
   setStoredSessionToken,
   type ProviderPreset,
 } from './services/api';
+import {
+  ensureUserProfile,
+  subscribeUserExtensions,
+  subscribeUserProfile,
+  subscribeUserProjects,
+  subscribeUserTaskRecords,
+  syncExtensionPrefToFirestore,
+  syncProjectSummaryToFirestore,
+  syncTaskRecordToFirestore,
+  updateTaskPriorityInFirestore,
+  updateUserProfilePrefs,
+  type FirestoreExtensionPref,
+  type FirestoreProjectSummary,
+  type FirestoreTaskRecord,
+  type FirestoreUserProfile,
+} from './services/firestoreSync';
 import type {
   AgentTask,
   AuditLogEntry,
@@ -86,6 +105,15 @@ export function App() {
     }
   });
 
+  // Firebase Auth & Firestore Cloud State
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
+  const [firebaseAuthReady, setFirebaseAuthReady] = useState(false);
+  const [cloudProfile, setCloudProfile] = useState<FirestoreUserProfile | null>(null);
+  const [cloudExtensions, setCloudExtensions] = useState<FirestoreExtensionPref[]>([]);
+  const [cloudTasks, setCloudTasks] = useState<FirestoreTaskRecord[]>([]);
+  const [cloudProjects, setCloudProjects] = useState<FirestoreProjectSummary[]>([]);
+  const [firestoreError, setFirestoreError] = useState<Error | null>(null);
+
   const [session, setSession] = useState<PublicUserSession | null>(null);
   const [booting, setBooting] = useState(true);
 
@@ -120,6 +148,13 @@ export function App() {
 
   const activeProjectIdRef = useRef(activeProjectId);
   activeProjectIdRef.current = activeProjectId;
+  const firebaseUidRef = useRef<string | null>(null);
+  firebaseUidRef.current = firebaseUser?.uid ?? null;
+
+  // Propagate critical Firestore permission/quota errors to ErrorBoundary
+  if (firestoreError) {
+    throw firestoreError;
+  }
 
   const showToast = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
     setToast({ text, tone });
@@ -131,6 +166,77 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  // Listen to Firebase Auth state changes
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setFirebaseUser(user);
+      setFirebaseAuthReady(true);
+      if (!user) {
+        setCloudProfile(null);
+        setCloudExtensions([]);
+        setCloudTasks([]);
+        setCloudProjects([]);
+        setStoredSessionToken(null);
+        setSession(null);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Attach Firestore real-time listeners ONLY when Firebase auth is ready and user is authenticated
+  useEffect(() => {
+    if (!firebaseAuthReady || !firebaseUser) return;
+
+    let cancelled = false;
+    let unsubProfile: (() => void) | undefined;
+    let unsubExtensions: (() => void) | undefined;
+    let unsubTasks: (() => void) | undefined;
+    let unsubProjects: (() => void) | undefined;
+
+    ensureUserProfile(firebaseUser, { theme })
+      .then((profile) => {
+        if (cancelled) return;
+        setCloudProfile(profile);
+        setTheme(profile.theme);
+
+        unsubProfile = subscribeUserProfile(
+          firebaseUser.uid,
+          (nextProfile) => {
+            setCloudProfile(nextProfile);
+          },
+          (err) => setFirestoreError(err)
+        );
+        unsubExtensions = subscribeUserExtensions(
+          firebaseUser.uid,
+          (items) => setCloudExtensions(items),
+          (err) => setFirestoreError(err)
+        );
+        unsubTasks = subscribeUserTaskRecords(
+          firebaseUser.uid,
+          (items) => setCloudTasks(items),
+          (err) => setFirestoreError(err)
+        );
+        unsubProjects = subscribeUserProjects(
+          firebaseUser.uid,
+          (items) => setCloudProjects(items),
+          (err) => setFirestoreError(err)
+        );
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      unsubProfile?.();
+      unsubExtensions?.();
+      unsubTasks?.();
+      unsubProjects?.();
+    };
+  }, [firebaseAuthReady, firebaseUser]);
+
   // Apply Fluent Dark/Light class on root element
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -140,6 +246,15 @@ export function App() {
       // Ignore storage failures
     }
   }, [theme]);
+
+  const handleThemeChange = useCallback((nextTheme: 'dark' | 'light') => {
+    setTheme(nextTheme);
+    if (firebaseUidRef.current) {
+      updateUserProfilePrefs(firebaseUidRef.current, { theme: nextTheme }).catch((err) => {
+        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+      });
+    }
+  }, []);
 
   // Track Electron window maximize state
   useEffect(() => {
@@ -179,10 +294,11 @@ export function App() {
     return () => window.removeEventListener('click', close);
   }, [openMenu]);
 
-  // Check existing session on startup
+  // Check existing backend session once Firebase Auth is ready
   useEffect(() => {
+    if (!firebaseAuthReady) return;
     const token = getStoredSessionToken();
-    if (!token) {
+    if (!token || !firebaseUser) {
       setBooting(false);
       return;
     }
@@ -194,7 +310,7 @@ export function App() {
         setSession(null);
       })
       .finally(() => setBooting(false));
-  }, []);
+  }, [firebaseAuthReady, firebaseUser]);
 
   const refreshProjectData = useCallback(async (projectId: string) => {
     if (!projectId) return;
@@ -226,24 +342,27 @@ export function App() {
     setUsage(usageRes.usage);
     setAuditLogs(dedupeById(auditRes.auditLogs));
 
-    const currentId = activeProjectIdRef.current;
+    const preferredProjId = activeProjectIdRef.current || cloudProfile?.activeProjectId || '';
     const targetProject =
-      uniqueProjects.find((p) => p.id === currentId) || uniqueProjects[0] || null;
+      uniqueProjects.find((p) => p.id === preferredProjId) || uniqueProjects[0] || null;
     if (targetProject) {
-      if (targetProject.id !== currentId) {
+      if (targetProject.id !== activeProjectIdRef.current) {
         setActiveProjectId(targetProject.id);
         setActiveFilePath(targetProject.files[0]?.path ?? null);
       }
       await refreshProjectData(targetProject.id);
+      if (firebaseUidRef.current) {
+        syncProjectSummaryToFirestore(firebaseUidRef.current, targetProject).catch(() => {});
+      }
     }
-  }, [refreshProjectData]);
+  }, [refreshProjectData, cloudProfile?.activeProjectId]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || !firebaseUser) return;
     refreshGlobalData().catch((err) => {
       showToast(err instanceof Error ? err.message : 'Failed to load workspace data.', 'error');
     });
-  }, [session, refreshGlobalData, showToast]);
+  }, [session, firebaseUser, refreshGlobalData, showToast]);
 
   // Real-Time Server-Sent Events Sync
   useEffect(() => {
@@ -320,7 +439,6 @@ export function App() {
     [activeProject, activeFilePath]
   );
 
-  // Keep activeFilePath synced if current file disappears
   useEffect(() => {
     if (!activeProject) return;
     if (!activeFilePath || !activeProject.files.some((f) => f.path === activeFilePath)) {
@@ -335,6 +453,12 @@ export function App() {
     const found = projects.find((p) => p.id === projectId);
     setActiveFilePath(found?.files[0]?.path ?? null);
     await refreshProjectData(projectId);
+    if (firebaseUidRef.current) {
+      updateUserProfilePrefs(firebaseUidRef.current, { activeProjectId: projectId }).catch(() => {});
+      if (found) {
+        syncProjectSummaryToFirestore(firebaseUidRef.current, found).catch(() => {});
+      }
+    }
   };
 
   const handleOpenFileLine = (filePath: string, line = 1) => {
@@ -364,6 +488,9 @@ export function App() {
       ]);
       setSecurityFindings(dedupeById(secRes.findings));
       setExtensionHost(extRes.host);
+      if (firebaseUidRef.current) {
+        syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch(() => {});
+      }
     },
     [activeProject]
   );
@@ -391,6 +518,9 @@ export function App() {
     setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
     const extRes = await devmindApi.getExtensionsHost(activeProject.id);
     setExtensionHost(extRes.host);
+    if (firebaseUidRef.current) {
+      syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch(() => {});
+    }
     showToast(`Re-indexed ${res.project.architecture.totalSymbols} symbols.`);
   };
 
@@ -405,32 +535,55 @@ export function App() {
     setActiveProjectId(res.project.id);
     setActiveFilePath(res.project.files[0]?.path ?? null);
     await refreshProjectData(res.project.id);
+    if (firebaseUidRef.current) {
+      syncProjectSummaryToFirestore(firebaseUidRef.current, res.project).catch((err) => {
+        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+      });
+      updateUserProfilePrefs(firebaseUidRef.current, { activeProjectId: res.project.id }).catch(() => {});
+    }
     setScreen('explorer');
-    showToast(`Imported repository "${res.project.name}".`);
+    showToast(`Imported repository "${res.project.name}" and synced to Firestore.`);
   };
 
-  // Extension Host Handlers
+  // Extension Host Handlers (synced to Firestore per user)
+  const persistExtSnapshot = (host: ExtensionHostSnapshot, ids: string[]) => {
+    const uid = firebaseUidRef.current;
+    if (!uid) return;
+    for (const id of ids) {
+      const rec = host.extensions.find((e) => e.manifest.id === id);
+      if (rec) {
+        syncExtensionPrefToFirestore(uid, rec).catch((err) => {
+          setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+        });
+      }
+    }
+  };
+
   const handleInstallExtension = async (extensionId: string) => {
     const res = await devmindApi.installExtension(extensionId, activeProject?.id);
     setExtensionHost(res.host);
+    persistExtSnapshot(res.host, res.installedIds.length ? res.installedIds : [extensionId]);
     showToast(`Installed ${res.installedIds.join(', ')}`);
   };
 
   const handleUninstallExtension = async (extensionId: string, cascade = false) => {
     const res = await devmindApi.uninstallExtension(extensionId, cascade, activeProject?.id);
     setExtensionHost(res.host);
+    persistExtSnapshot(res.host, res.uninstalledIds.length ? res.uninstalledIds : [extensionId]);
     showToast(`Uninstalled ${res.uninstalledIds.join(', ')}`);
   };
 
   const handleToggleExtension = async (extensionId: string, enabled: boolean) => {
     const res = await devmindApi.toggleExtension(extensionId, enabled, activeProject?.id);
     setExtensionHost(res.host);
+    persistExtSnapshot(res.host, [extensionId]);
     showToast(`${enabled ? 'Enabled' : 'Disabled'} ${extensionId}`);
   };
 
   const handleActivateExtension = async (extensionId: string) => {
     const res = await devmindApi.activateExtension(extensionId, activeProject?.id);
     setExtensionHost(res.host);
+    persistExtSnapshot(res.host, [extensionId]);
     showToast(`Activated ${extensionId}`);
   };
 
@@ -450,7 +603,7 @@ export function App() {
     showToast(res.message);
   };
 
-  // Tasks, Approvals, Debugging, Chat, Policy
+  // Tasks, Approvals, Debugging, Chat, Policy (with Firestore persistence)
   const handleCreateTask = async (
     title: string,
     description: string,
@@ -467,6 +620,11 @@ export function App() {
     });
     setTasks((prev) => dedupeById([res.task, ...prev]));
     setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    if (firebaseUidRef.current) {
+      syncTaskRecordToFirestore(firebaseUidRef.current, res.task, activeProject.name).catch((err) => {
+        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+      });
+    }
     const [usageRes, secRes, extRes] = await Promise.all([
       devmindApi.getUsage(),
       devmindApi.getSecurityFindings(activeProject.id),
@@ -482,6 +640,9 @@ export function App() {
     setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
     setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
     setSecurityFindings(dedupeById(res.securityFindings));
+    if (firebaseUidRef.current) {
+      syncTaskRecordToFirestore(firebaseUidRef.current, res.task, res.project.name).catch(() => {});
+    }
     if (activeProject) {
       const extRes = await devmindApi.getExtensionsHost(activeProject.id);
       setExtensionHost(extRes.host);
@@ -504,11 +665,19 @@ export function App() {
   const handleCancelTask = async (taskId: string) => {
     const res = await devmindApi.cancelTask(taskId);
     setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+    if (firebaseUidRef.current && activeProject) {
+      syncTaskRecordToFirestore(firebaseUidRef.current, res.task, activeProject.name).catch(() => {});
+    }
   };
 
   const handleUpdateTaskPriority = async (taskId: string, priority: TaskPriority) => {
     const res = await devmindApi.updateTaskPriority(taskId, priority);
     setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+    if (firebaseUidRef.current) {
+      updateTaskPriorityInFirestore(firebaseUidRef.current, taskId, priority).catch((err) => {
+        setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+      });
+    }
   };
 
   const handleSendChat = async (message: string) => {
@@ -541,7 +710,12 @@ export function App() {
     try {
       await devmindApi.logout();
     } catch {
-      // Ignore logout errors
+      // Ignore backend logout errors
+    }
+    try {
+      await signOutFirebase();
+    } catch {
+      // Ignore Firebase sign-out errors
     }
     setStoredSessionToken(null);
     setSession(null);
@@ -562,7 +736,7 @@ export function App() {
     }
   };
 
-  if (booting) {
+  if (booting || !firebaseAuthReady) {
     return (
       <div className="h-screen w-screen bg-[var(--surface-chrome)] flex items-center justify-center text-xs text-[var(--ink-secondary)]">
         Starting DevMind Studio...
@@ -570,12 +744,25 @@ export function App() {
     );
   }
 
-  if (!session) {
+  if (!firebaseUser || !session) {
     return (
       <LoginGate
-        onAuthenticated={(token, nextSession) => {
+        firebaseUser={firebaseUser}
+        firebaseAuthReady={firebaseAuthReady}
+        onAuthenticated={(token, nextSession, profile) => {
           setStoredSessionToken(token);
           setSession(nextSession);
+          if (profile) {
+            setCloudProfile(profile);
+            setTheme(profile.theme);
+          }
+          if (firebaseUser) {
+            updateUserProfilePrefs(firebaseUser.uid, {
+              preferredProvider: nextSession.llm.provider,
+              preferredModel: nextSession.llm.model,
+              preferredBaseUrl: nextSession.llm.baseUrl,
+            }).catch(() => {});
+          }
         }}
       />
     );
@@ -594,6 +781,8 @@ export function App() {
       (f) => f.status === 'open' && f.severity !== 'critical' && f.severity !== 'high'
     ).length +
     (extensionHost?.diagnostics.filter((d) => d.severity === 'warning').length ?? 0);
+
+  const cloudSyncCount = cloudExtensions.length + cloudTasks.length + cloudProjects.length;
 
   const navItems: Array<{
     id: ScreenId;
@@ -696,7 +885,7 @@ export function App() {
                         }}
                         className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--status-danger)]"
                       >
-                        Sign Out
+                        Sign Out ({firebaseUser.email})
                       </button>
                     </>
                   )}
@@ -750,7 +939,7 @@ export function App() {
                       <button
                         type="button"
                         onClick={() => {
-                          setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+                          handleThemeChange(theme === 'dark' ? 'light' : 'dark');
                           setOpenMenu(null);
                         }}
                         className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
@@ -832,7 +1021,7 @@ export function App() {
         <button
           type="button"
           onClick={() => setCommandPaletteOpen(true)}
-          className="win-no-drag hidden md:flex items-center justify-between gap-3 h-6 w-[320px] lg:w-[380px] px-2.5 rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-xs text-[var(--ink-muted)] transition-colors"
+          className="win-no-drag hidden md:flex items-center justify-between gap-3 h-6 w-[280px] lg:w-[340px] px-2.5 rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-xs text-[var(--ink-muted)] transition-colors"
         >
           <span className="inline-flex items-center gap-2 truncate">
             <Search className="w-3 h-3 shrink-0" />
@@ -841,13 +1030,13 @@ export function App() {
           <span className="font-mono text-[10px] shrink-0">Ctrl+K</span>
         </button>
 
-        {/* Right: Repo Switcher + Panel Toggles + Theme + Native Window Controls */}
+        {/* Right: Repo Switcher + Panel Toggles + Google User + Theme + Native Window Controls */}
         <div className="flex items-center gap-1 win-no-drag">
           <select
             aria-label="Active repository"
             value={activeProject?.id || ''}
             onChange={(e) => handleSelectProject(e.target.value)}
-            className="h-6 max-w-[150px] px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            className="h-6 max-w-[140px] px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
           >
             {dedupeById(projects).map((proj) => (
               <option key={proj.id} value={proj.id}>
@@ -891,12 +1080,31 @@ export function App() {
 
           <button
             type="button"
-            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            onClick={() => handleThemeChange(theme === 'dark' ? 'light' : 'dark')}
             title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
             className="p-1 rounded-[3px] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
           >
             {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
           </button>
+
+          {/* Authenticated Google User Identity */}
+          <div
+            className="hidden sm:flex items-center gap-1.5 pl-1.5 pr-1 text-[11px] text-[var(--ink-secondary)]"
+            title={`Signed in via Google: ${firebaseUser.email || firebaseUser.displayName}`}
+          >
+            {firebaseUser.photoURL ? (
+              <img
+                src={firebaseUser.photoURL}
+                alt={firebaseUser.displayName || 'User'}
+                referrerPolicy="no-referrer"
+                className="w-5 h-5 rounded-full border border-[var(--border-hairline)]"
+              />
+            ) : (
+              <span className="w-5 h-5 rounded-full bg-[var(--accent-soft)] text-[var(--accent-primary)] flex items-center justify-center text-[10px] font-semibold">
+                {(firebaseUser.displayName || firebaseUser.email || 'U').charAt(0).toUpperCase()}
+              </span>
+            )}
+          </div>
 
           <button
             type="button"
@@ -1212,8 +1420,17 @@ export function App() {
                 presets={presets}
                 usage={usage}
                 theme={theme}
-                onThemeChange={setTheme}
-                onSessionUpdated={setSession}
+                onThemeChange={handleThemeChange}
+                onSessionUpdated={(nextSession) => {
+                  setSession(nextSession);
+                  if (firebaseUidRef.current) {
+                    updateUserProfilePrefs(firebaseUidRef.current, {
+                      preferredProvider: nextSession.llm.provider,
+                      preferredModel: nextSession.llm.model,
+                      preferredBaseUrl: nextSession.llm.baseUrl,
+                    }).catch(() => {});
+                  }
+                }}
                 onUpdatePolicy={async (actionType, level: PermissionLevel) => {
                   const res = await devmindApi.updatePolicy(actionType, level);
                   setPolicies(res.policies);
@@ -1221,6 +1438,14 @@ export function App() {
                 onUpdateBudget={async (budgetUsd, tokenLimit) => {
                   const res = await devmindApi.updateBudget(budgetUsd, tokenLimit);
                   setUsage(res.usage);
+                  if (firebaseUidRef.current) {
+                    updateUserProfilePrefs(firebaseUidRef.current, {
+                      monthlyBudgetUsd: budgetUsd,
+                      monthlyTokenLimit: tokenLimit,
+                    }).catch((err) => {
+                      setFirestoreError(err instanceof Error ? err : new Error(String(err)));
+                    });
+                  }
                 }}
               />
             )}
@@ -1259,7 +1484,7 @@ export function App() {
         )}
       </div>
 
-      {/* Native Windows Status Bar (24px) with Live Extension Status Contributions */}
+      {/* Native Windows Status Bar (24px) with Live Extension & Firestore Status */}
       <footer className="h-6 bg-[var(--surface-chrome)] border-t border-[var(--border-hairline)] px-2.5 flex items-center justify-between text-[11px] text-[var(--ink-secondary)] shrink-0 select-none">
         <div className="flex items-center gap-3 min-w-0 overflow-hidden">
           <span className="inline-flex items-center gap-1 font-mono text-[var(--ink-primary)] shrink-0">
@@ -1305,7 +1530,6 @@ export function App() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0 font-mono">
-          {/* Extension Status Bar Items (Right Alignment) */}
           {(extensionHost?.statusBarItems ?? [])
             .filter((item) => item.alignment === 'right')
             .map((item) => (
@@ -1331,6 +1555,14 @@ export function App() {
               Ln {cursorPos.line}, Col {cursorPos.col} · {activeFile.language}
             </span>
           )}
+
+          <span
+            className="hidden lg:inline-flex items-center gap-1 text-[var(--ink-muted)]"
+            title={`Firestore synced for ${firebaseUser.email}: ${cloudProjects.length} projects, ${cloudTasks.length} tasks, ${cloudExtensions.length} extensions`}
+          >
+            <Cloud className="w-3 h-3 text-[var(--accent-primary)]" />
+            <span className="tabular-nums">Cloud ({cloudSyncCount})</span>
+          </span>
 
           <button
             type="button"

@@ -26,7 +26,7 @@ call npm run build
 if errorlevel 1 goto :error
 
 echo [4/4] Building standalone Windows x64 NSIS Installer and Portable .exe...
-call npx electron-builder --win --x64 --config electron-builder.yml
+call npx electron-builder --win --x64 --config electron-builder.yml --publish never
 if errorlevel 1 goto :error
 
 echo.

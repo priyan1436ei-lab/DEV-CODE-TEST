@@ -17,6 +17,7 @@ files:
   - server.ts
   - src/types/**/*
   - electron/**/*
+  - firebase-applet-config.json
   - package.json
 win:
   target:
@@ -39,4 +40,4 @@ nsis:
   deleteAppDataOnUninstall: false
   runAfterFinish: true
 portable:
-  artifactName: DevMind-Studio-${version}-x64-Portable.${ext}
+  artifactName: DevMind-Studio-${version}-${arch}-Portable.${ext}
