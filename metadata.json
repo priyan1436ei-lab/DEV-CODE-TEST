@@ -1,6 +1,6 @@
 {
   "name": "DevMind AI",
-  "description": "Autonomous AI software engineering studio with BYOK LLM gateway, real-time synced code editor, repository brain, approval checkpoints, and sandboxed test coverage.",
+  "description": "Windows-optimized desktop software engineering studio with VS Code-style Extensions Marketplace, live synced code editor, AST repository architecture graph, BYOK model gateway, and policy-gated code review.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

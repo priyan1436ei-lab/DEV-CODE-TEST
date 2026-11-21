@@ -3,6 +3,7 @@ import type {
   AuditLogEntry,
   ChatMessage,
   DebugAnalysis,
+  ExtensionHostSnapshot,
   LlmProviderId,
   PermissionLevel,
   PermissionPolicyRule,
@@ -11,7 +12,6 @@ import type {
   SearchHit,
   SecurityFinding,
   TaskPriority,
-  TestRun,
   UsageLedger,
 } from '../types/devmind';
 
@@ -85,7 +85,7 @@ export const devmindApi = {
     baseUrl: string;
     model: string;
     apiKey: string;
-    sandboxOnly?: boolean;
+    localWorkspaceOnly?: boolean;
   }) =>
     request<{ token: string; session: PublicUserSession }>('/api/v1/auth/login', {
       method: 'POST',
@@ -145,11 +145,49 @@ export const devmindApi = {
   getSecurityFindings: (projectId: string) =>
     request<{ findings: SecurityFinding[] }>(`/api/v1/projects/${projectId}/security`),
 
-  getTestRuns: (projectId: string) =>
-    request<{ testRuns: TestRun[] }>(`/api/v1/projects/${projectId}/tests`),
+  // Extensions Marketplace & Runtime Host
+  getExtensionsHost: (projectId?: string) =>
+    request<{ host: ExtensionHostSnapshot }>(
+      projectId ? `/api/v1/extensions?projectId=${encodeURIComponent(projectId)}` : '/api/v1/extensions'
+    ),
 
-  runSandboxTests: (projectId: string) =>
-    request<{ testRun: TestRun }>(`/api/v1/projects/${projectId}/tests/run`, { method: 'POST' }),
+  installExtension: (extensionId: string, projectId?: string) =>
+    request<{ installedIds: string[]; host: ExtensionHostSnapshot }>(
+      `/api/v1/extensions/${encodeURIComponent(extensionId)}/install`,
+      { method: 'POST', body: JSON.stringify({ projectId }) }
+    ),
+
+  uninstallExtension: (extensionId: string, cascade = false, projectId?: string) =>
+    request<{ uninstalledIds: string[]; host: ExtensionHostSnapshot }>(
+      `/api/v1/extensions/${encodeURIComponent(extensionId)}/uninstall`,
+      { method: 'POST', body: JSON.stringify({ cascade, projectId }) }
+    ),
+
+  toggleExtension: (extensionId: string, enabled: boolean, projectId?: string) =>
+    request<{ host: ExtensionHostSnapshot }>(
+      `/api/v1/extensions/${encodeURIComponent(extensionId)}/toggle`,
+      { method: 'POST', body: JSON.stringify({ enabled, projectId }) }
+    ),
+
+  activateExtension: (extensionId: string, projectId?: string) =>
+    request<{ host: ExtensionHostSnapshot }>(
+      `/api/v1/extensions/${encodeURIComponent(extensionId)}/activate`,
+      { method: 'POST', body: JSON.stringify({ projectId }) }
+    ),
+
+  executeExtensionCommand: (commandId: string, projectId: string, filePath?: string) =>
+    request<{
+      ok: boolean;
+      extensionId: string;
+      commandId: string;
+      message: string;
+      mutatedFilePath?: string;
+      project?: Project;
+      host: ExtensionHostSnapshot;
+    }>('/api/v1/extensions/commands/execute', {
+      method: 'POST',
+      body: JSON.stringify({ commandId, projectId, filePath }),
+    }),
 
   getChatHistory: (projectId: string) =>
     request<{ messages: ChatMessage[] }>(`/api/v1/projects/${projectId}/chat`),
@@ -178,7 +216,7 @@ export const devmindApi = {
     projectId: string;
     title: string;
     description: string;
-    executionMode?: 'approval' | 'strict_sandbox';
+    executionMode?: 'approval' | 'direct';
     priority?: TaskPriority;
   }) =>
     request<{ task: AgentTask; project: Project }>('/api/v1/agent/tasks', {

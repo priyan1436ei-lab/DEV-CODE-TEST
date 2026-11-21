@@ -1,100 +1,73 @@
-import React, { useRef, useState } from 'react';
-import { FolderOpen, Upload, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { FolderPlus, Loader2, Upload, X } from 'lucide-react';
 
 interface ImportRepoModalProps {
   open: boolean;
   onClose: () => void;
-  onCreateProject: (input: {
+  onImport: (body: {
     name: string;
     description: string;
+    localPath: string;
     files: Array<{ path: string; content: string }>;
   }) => Promise<void>;
 }
 
-const ALLOWED_EXT = /\.(ts|tsx|js|jsx|mjs|py|go|rs|java|sql|json|yaml|yml|md|css|html)$/i;
+const DEFAULT_TEMPLATE_FILES = [
+  {
+    path: 'src/index.ts',
+    content: `import { createOrderService } from './services/orderService';\n\nconst orders = createOrderService();\nconsole.log('Service initialized:', orders.getStatus());\n`,
+  },
+  {
+    path: 'src/services/orderService.ts',
+    content: `export interface OrderRecord {\n  id: string;\n  totalCents: number;\n  currency: string;\n}\n\nexport function createOrderService() {\n  const records: OrderRecord[] = [];\n\n  return {\n    add(order: OrderRecord) {\n      records.push(order);\n      return order;\n    },\n    getStatus() {\n      return { count: records.length, healthy: true };\n    },\n  };\n}\n`,
+  },
+  {
+    path: 'package.json',
+    content: `{\n  "name": "order-service",\n  "version": "1.0.0",\n  "type": "module"\n}\n`,
+  },
+];
 
-export const ImportRepoModal: React.FC<ImportRepoModalProps> = ({
-  open,
-  onClose,
-  onCreateProject,
-}) => {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [stagedFiles, setStagedFiles] = useState<Array<{ path: string; content: string }>>([]);
-  const [manualFilePath, setManualFilePath] = useState('src/service.ts');
-  const [manualFileContent, setManualFileContent] = useState(
-    `export function parseDiscount(rate: number, amount: number): number {\n  if (rate < 0 || rate > 1) throw new Error('Invalid rate');\n  return Number((amount * (1 - rate)).toFixed(2));\n}\n`
-  );
+export const ImportRepoModal: React.FC<ImportRepoModalProps> = ({ open, onClose, onImport }) => {
+  const [name, setName] = useState('order-service');
+  const [description, setDescription] = useState('TypeScript microservice workspace');
+  const [localPath, setLocalPath] = useState('C:\\Workspaces\\order-service');
+  const [files, setFiles] = useState<Array<{ path: string; content: string }>>(DEFAULT_TEMPLATE_FILES);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   if (!open) return null;
 
-  const handleFolderSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (!fileList || fileList.length === 0) return;
-    setError(null);
-
     const loaded: Array<{ path: string; content: string }> = [];
-    let inferredRoot = '';
-
-    for (const file of Array.from(fileList)) {
-      const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
-      if (/(?:^|\/)(node_modules|\.git|dist|build|venv|target)\//.test(rel)) continue;
-      if (!ALLOWED_EXT.test(rel)) continue;
-      if (file.size > 200_000) continue;
-
-      const parts = rel.split('/');
-      if (!inferredRoot && parts.length > 1) inferredRoot = parts[0];
-      const cleanPath = parts.length > 1 ? parts.slice(1).join('/') : rel;
-      const content = await file.text();
-      loaded.push({ path: cleanPath, content });
-      if (loaded.length >= 40) break;
+    for (let i = 0; i < Math.min(fileList.length, 30); i++) {
+      const f = fileList[i];
+      if (f.size > 200_000) continue;
+      const content = await f.text();
+      const relPath = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+      loaded.push({ path: relPath.replace(/^\/+/, ''), content });
     }
-
-    if (loaded.length === 0) {
-      setError('No supported source files found in the selected folder.');
-      return;
+    if (loaded.length > 0) {
+      setFiles(loaded);
     }
-
-    if (!name && inferredRoot) setName(inferredRoot);
-    setStagedFiles(loaded);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!name.trim() || files.length === 0) return;
     setError(null);
-
-    const files =
-      stagedFiles.length > 0
-        ? stagedFiles
-        : manualFilePath.trim() && manualFileContent.trim()
-          ? [{ path: manualFilePath.trim(), content: manualFileContent }]
-          : [];
-
-    if (!name.trim()) {
-      setError('Please enter a project name.');
-      return;
-    }
-    if (files.length === 0) {
-      setError('Select a local folder or provide at least one source file.');
-      return;
-    }
-
     setSubmitting(true);
     try {
-      await onCreateProject({
+      await onImport({
         name: name.trim(),
-        description: description.trim() || 'Local repository indexed in DevMind AI.',
+        description: description.trim(),
+        localPath: localPath.trim() || `C:\\Workspaces\\${name.trim()}`,
         files,
       });
-      setName('');
-      setDescription('');
-      setStagedFiles([]);
       onClose();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Import failed');
+      setError(err instanceof Error ? err.message : 'Unable to import repository.');
     } finally {
       setSubmitting(false);
     }
@@ -102,126 +75,91 @@ export const ImportRepoModal: React.FC<ImportRepoModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/65 flex items-center justify-center p-4"
+      className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
       onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Import Local Repository"
     >
       <div
-        className="modal-animate-in w-full max-w-lg bg-[#151821] border border-[#353B50] rounded-[14px] overflow-hidden shadow-2xl"
+        className="w-full max-w-lg rounded-[6px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] shadow-xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#262B3A]">
-          <h2 className="text-[15px] font-semibold text-[#E6E9F2]">
-            Open Local Repository or Create Workspace Project
-          </h2>
-          <button
-            onClick={onClose}
-            aria-label="Close modal"
-            className="p-1 text-[#6B728A] hover:text-[#E6E9F2] rounded"
-          >
+        <div className="px-4 h-11 border-b border-[var(--border-hairline)] bg-[var(--surface-chrome)] flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <FolderPlus className="w-4 h-4 text-[var(--accent-primary)]" />
+            <h2 className="text-xs font-semibold text-[var(--ink-primary)]">Import Repository Workspace</h2>
+          </div>
+          <button type="button" onClick={onClose} className="p-1 text-[var(--ink-muted)] hover:text-[var(--ink-primary)]">
             <X className="w-4 h-4" />
           </button>
         </div>
 
-        <form onSubmit={(e) => void handleSubmit(e)} className="p-5 space-y-4">
+        <form onSubmit={handleSubmit} className="p-4 space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <label htmlFor="repo-name" className="block text-[12px] text-[#A3AABF]">
-                Project Name
-              </label>
+            <div>
+              <label className="block text-[11px] text-[var(--ink-secondary)] mb-1">Repository Name</label>
               <input
-                id="repo-name"
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. payments-api"
-                className="w-full bg-[#0F1117] border border-[#262B3A] focus:border-[#6C7BFF] rounded-[6px] px-3 py-2 text-[13px] text-[#E6E9F2] outline-none"
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setLocalPath(`C:\\Workspaces\\${e.target.value.trim() || 'workspace'}`);
+                }}
+                required
+                className="w-full h-8 px-2.5 text-xs rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
               />
             </div>
 
-            <div className="space-y-1">
-              <label htmlFor="repo-desc" className="block text-[12px] text-[#A3AABF]">
-                Description
-              </label>
+            <div>
+              <label className="block text-[11px] text-[var(--ink-secondary)] mb-1">Windows Local Path</label>
               <input
-                id="repo-desc"
                 type="text"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional summary"
-                className="w-full bg-[#0F1117] border border-[#262B3A] focus:border-[#6C7BFF] rounded-[6px] px-3 py-2 text-[13px] text-[#E6E9F2] outline-none"
+                value={localPath}
+                onChange={(e) => setLocalPath(e.target.value)}
+                className="w-full h-8 px-2.5 text-xs font-mono rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
               />
             </div>
           </div>
 
-          {/* Folder Picker */}
-          <div className="p-4 rounded-[10px] bg-[#0F1117] border border-dashed border-[#353B50] space-y-2">
+          <div>
+            <label className="block text-[11px] text-[var(--ink-secondary)] mb-1">Description</label>
             <input
-              ref={folderInputRef}
-              type="file"
-              multiple
-              // @ts-expect-error webkitdirectory is supported in Chromium/WebKit/Firefox desktop browsers
-              webkitdirectory=""
-              onChange={(e) => void handleFolderSelect(e)}
-              className="hidden"
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="w-full h-8 px-2.5 text-xs rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
             />
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 text-[12px] text-[#A3AABF]">
-                <FolderOpen className="w-4 h-4 text-[#6C7BFF] shrink-0" />
-                <span>
-                  {stagedFiles.length > 0
-                    ? `${stagedFiles.length} source file(s) staged (node_modules/.git excluded)`
-                    : 'Import a local folder (excludes node_modules, .git, dist, venv)'}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => folderInputRef.current?.click()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium bg-[#1C2030] hover:bg-[#262B3A] text-[#E6E9F2] border border-[#353B50] rounded-[6px] whitespace-nowrap"
-              >
-                <Upload className="w-3.5 h-3.5" />
-                <span>Select Folder</span>
-              </button>
-            </div>
           </div>
 
-          {/* Quick Single-File Seed Fallback */}
-          {stagedFiles.length === 0 && (
-            <div className="space-y-2">
-              <div className="text-[12px] text-[#A3AABF]">Or initialize with a source file:</div>
-              <input
-                type="text"
-                value={manualFilePath}
-                onChange={(e) => setManualFilePath(e.target.value)}
-                className="w-full bg-[#0F1117] border border-[#262B3A] rounded-[6px] px-3 py-1.5 font-mono text-[12px] text-[#E6E9F2] outline-none"
-              />
-              <textarea
-                rows={4}
-                value={manualFileContent}
-                onChange={(e) => setManualFileContent(e.target.value)}
-                className="w-full bg-[#0F1117] border border-[#262B3A] rounded-[6px] p-2.5 font-mono text-[12px] text-[#E6E9F2] outline-none"
-              />
+          <div className="p-3 rounded-[4px] border border-dashed border-[var(--border-strong)] bg-[var(--surface-canvas)] flex items-center justify-between gap-3">
+            <div className="text-xs text-[var(--ink-secondary)]">
+              <div className="font-medium text-[var(--ink-primary)]">{files.length} source files staged</div>
+              <div className="text-[11px] text-[var(--ink-muted)] mt-0.5">
+                Upload local files or use the default TypeScript template.
+              </div>
             </div>
-          )}
+            <label className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 cursor-pointer shrink-0">
+              <Upload className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+              Select Files
+              <input type="file" multiple onChange={handleFileUpload} className="hidden" />
+            </label>
+          </div>
 
-          {error && <div className="text-[12px] text-[#FF5C6C]">{error}</div>}
+          {error && <div className="text-xs text-[var(--status-danger)]">{error}</div>}
 
-          <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#262B3A]">
+          <div className="pt-2 border-t border-[var(--border-hairline)] flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={onClose}
-              className="px-3.5 py-2 text-[12px] text-[#A3AABF] hover:text-[#E6E9F2]"
+              className="h-8 px-3 text-xs rounded-[4px] border border-[var(--border-hairline)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]"
             >
               Cancel
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="px-4 py-2 text-[12px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] disabled:opacity-50 text-[#0D0F14] rounded-[6px]"
+              className="h-8 px-4 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5"
             >
-              {submitting ? 'Indexing Repository...' : 'Create & Index Project'}
+              {submitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+              Import & Index
             </button>
           </div>
         </form>

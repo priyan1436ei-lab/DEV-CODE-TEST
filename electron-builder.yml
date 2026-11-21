@@ -1,6 +1,14 @@
-appId: ai.devmind.studio
-productName: DevMind AI
-copyright: Copyright © 2026 DevMind AI
+appId: com.devmind.studio
+productName: DevMind Studio
+copyright: Copyright © 2026 DevMind Systems
+compression: maximum
+asar: true
+asarUnpack:
+  - server/**/*
+  - server.ts
+  - src/types/**/*
+  - node_modules/tsx/**/*
+  - node_modules/esbuild/**/*
 directories:
   output: dist-electron
 files:
@@ -18,9 +26,17 @@ win:
     - target: portable
       arch:
         - x64
-  artifactName: DevMind-AI-${version}-${arch}.${ext}
+  artifactName: DevMind-Studio-${version}-${arch}-${target}.${ext}
+  requestedExecutionLevel: asInvoker
 nsis:
   oneClick: false
+  perMachine: false
+  allowElevation: true
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  shortcutName: DevMind Studio
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+portable:
+  artifactName: DevMind-Studio-${version}-x64-Portable.exe

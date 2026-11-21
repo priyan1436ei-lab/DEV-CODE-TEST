@@ -1,312 +1,358 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  ArrowUpRight,
-  CheckCircle2,
+  ArrowRight,
+  Blocks,
+  Code2,
+  FolderGit2,
   Play,
+  Plus,
+  RefreshCw,
   ShieldAlert,
-  Terminal,
-  XCircle,
+  ShieldCheck,
+  Wallet,
 } from 'lucide-react';
 import type {
   AgentTask,
+  ExtensionHostSnapshot,
   Project,
   ScreenId,
   SecurityFinding,
   TaskPriority,
-  TestRun,
   UsageLedger,
 } from '../types/devmind';
 
-const PRIORITY_STYLE: Record<TaskPriority, { label: string; color: string; bg: string; border: string }> = {
-  high: {
-    label: 'High',
-    color: '#FF5468',
-    bg: 'rgba(255, 84, 104, 0.1)',
-    border: 'rgba(255, 84, 104, 0.35)',
-  },
-  medium: {
-    label: 'Medium',
-    color: '#F5B642',
-    bg: 'rgba(245, 182, 66, 0.1)',
-    border: 'rgba(245, 182, 66, 0.35)',
-  },
-  low: {
-    label: 'Low',
-    color: '#4DB8FF',
-    bg: 'rgba(77, 184, 255, 0.1)',
-    border: 'rgba(77, 184, 255, 0.35)',
-  },
-};
-
 interface DashboardViewProps {
-  project: Project;
   projects: Project[];
+  activeProject: Project | null;
   tasks: AgentTask[];
   securityFindings: SecurityFinding[];
-  testRuns: TestRun[];
+  extensionHost: ExtensionHostSnapshot | null;
   usage: UsageLedger | null;
-  runningTests: boolean;
   onSelectProject: (projectId: string) => void;
   onNavigate: (screen: ScreenId) => void;
-  onRunSandboxTests: () => Promise<void>;
-  onLaunchMilestoneDemo: () => void;
-  onSelectTask: (task: AgentTask) => void;
   onOpenImportModal: () => void;
+  onReindex: () => Promise<void>;
+  onExecuteExtensionCommand: (commandId: string) => Promise<void>;
+  onOpenFileLine: (filePath: string, line: number) => void;
 }
 
+const PRIORITY_STYLES: Record<TaskPriority, { label: string; color: string }> = {
+  high: { label: 'High', color: 'text-[var(--status-danger)]' },
+  medium: { label: 'Medium', color: 'text-[var(--status-warning)]' },
+  low: { label: 'Low', color: 'text-[var(--status-success)]' },
+};
+
 export const DashboardView: React.FC<DashboardViewProps> = ({
-  project,
   projects,
+  activeProject,
   tasks,
   securityFindings,
-  testRuns,
+  extensionHost,
   usage,
-  runningTests,
   onSelectProject,
   onNavigate,
-  onRunSandboxTests,
-  onLaunchMilestoneDemo,
-  onSelectTask,
   onOpenImportModal,
+  onReindex,
+  onExecuteExtensionCommand,
+  onOpenFileLine,
 }) => {
   const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
+  const [reindexing, setReindexing] = useState(false);
+  const [runningCmd, setRunningCmd] = useState<string | null>(null);
 
-  const safeProjects = Array.isArray(projects) ? projects : [];
-  const safeTasks = Array.isArray(tasks) ? tasks : [];
-  const safeFindings = Array.isArray(securityFindings) ? securityFindings : [];
-  const safeRuns = Array.isArray(testRuns) ? testRuns : [];
+  const openSecurityFindings = useMemo(
+    () => securityFindings.filter((f) => f.status === 'open'),
+    [securityFindings]
+  );
 
-  const filteredTasks =
-    priorityFilter === 'all'
-      ? safeTasks
-      : safeTasks.filter((t) => (t.priority ?? 'medium') === priorityFilter);
+  const filteredTasks = useMemo(() => {
+    const list = priorityFilter === 'all' ? tasks : tasks.filter((t) => (t.priority || 'medium') === priorityFilter);
+    return list.slice(0, 6);
+  }, [tasks, priorityFilter]);
 
-  const latestRun = safeRuns[0] ?? null;
-  const criticalCount = safeFindings.filter((f) => f.severity === 'critical').length;
-  const highCount = safeFindings.filter((f) => f.severity === 'high').length;
-  const completedTasks = safeTasks.filter((t) => t.status === 'completed').length;
-  const spendPct = usage
+  const installedExtensions = useMemo(
+    () => extensionHost?.extensions.filter((e) => e.installed) ?? [],
+    [extensionHost]
+  );
+  const activeExtensionsCount = useMemo(
+    () => extensionHost?.extensions.filter((e) => e.state === 'active').length ?? 0,
+    [extensionHost]
+  );
+  const workspaceCommands = useMemo(
+    () => (extensionHost?.activeCommands ?? []).filter((c) => !c.requiresActiveFile).slice(0, 5),
+    [extensionHost]
+  );
+
+  const handleReindex = async () => {
+    setReindexing(true);
+    try {
+      await onReindex();
+    } finally {
+      setReindexing(false);
+    }
+  };
+
+  const handleRunWorkspaceCmd = async (commandId: string) => {
+    setRunningCmd(commandId);
+    try {
+      await onExecuteExtensionCommand(commandId);
+    } finally {
+      setRunningCmd(null);
+    }
+  };
+
+  const spendPercent = usage
     ? Math.min(100, Math.round((usage.spentUsd / Math.max(0.01, usage.monthlyBudgetUsd)) * 100))
     : 0;
 
   return (
-    <div className="h-full overflow-auto bg-[#090B10] p-6 space-y-6">
-      {/* Header Row */}
-      <div className="flex flex-wrap items-start justify-between gap-4 border-b border-[#262B3A] pb-5">
-        <div className="space-y-1 max-w-2xl">
-          <h1 className="text-[22px] font-semibold text-[#E6E9F2] tracking-tight">
-            {project.name}
+    <div className="h-full overflow-y-auto bg-[var(--surface-canvas)] p-6 space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border-hairline)] pb-4">
+        <div>
+          <h1 className="text-lg font-semibold text-[var(--ink-primary)] tracking-tight">
+            Workspace Overview
           </h1>
-          <p className="text-[13px] text-[#A3AABF] leading-relaxed">{project.description}</p>
-          <div className="flex flex-wrap items-center gap-2 text-[12px] text-[#6B728A] font-mono pt-1 tabular-nums">
-            <span>{project.primaryLanguage}</span>
-            <span aria-hidden="true">·</span>
-            <span>{project.framework}</span>
-            <span aria-hidden="true">·</span>
-            <span>branch {project.defaultBranch}</span>
-            <span aria-hidden="true">·</span>
-            <span>indexed in {project.indexingDurationMs}ms</span>
-          </div>
+          <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
+            {activeProject
+              ? `${activeProject.name} · ${activeProject.localPath} · ${activeProject.defaultBranch}`
+              : 'Select or import a repository to begin.'}
+          </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex items-center gap-2">
           <button
-            onClick={onOpenImportModal}
-            className="px-3.5 py-2 text-[13px] font-medium text-[#E6E9F2] bg-[#151821] hover:bg-[#1C2030] border border-[#262B3A] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
+            type="button"
+            onClick={handleReindex}
+            disabled={!activeProject || reindexing}
+            className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 transition-colors"
           >
-            Import Local Repo
+            <RefreshCw className={`w-3.5 h-3.5 ${reindexing ? 'animate-spin' : ''}`} />
+            Re-Index AST
           </button>
+
           <button
-            onClick={onLaunchMilestoneDemo}
-            className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] text-[#0D0F14] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
+            type="button"
+            onClick={() => onNavigate('extensions')}
+            className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5 transition-colors"
           >
-            <Play className="w-3.5 h-3.5" />
-            <span>Run Autonomous Security Fix</span>
+            <Blocks className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+            Extensions
+          </button>
+
+          <button
+            type="button"
+            onClick={onOpenImportModal}
+            className="h-8 px-3.5 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] inline-flex items-center gap-1.5 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            Import Repository
           </button>
         </div>
       </div>
 
-      {/* KPI Strip (Single Elevation, Tabular Numerals, No Hallucinated Scoreboards) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-1">
-          <div className="text-[12px] text-[#A3AABF]">Repository Brain</div>
-          <div className="text-[22px] font-semibold text-[#E6E9F2] font-mono tabular-nums">
-            {project.architecture.totalSymbols} symbols
+      {/* 4 Flat Native KPI Tiles */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3.5">
+        <div className="p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)]">
+          <div className="flex items-center justify-between text-xs text-[var(--ink-secondary)]">
+            <span>Indexed Codebase</span>
+            <Code2 className="w-4 h-4 text-[var(--accent-primary)]" />
           </div>
-          <div className="text-[12px] text-[#6B728A] tabular-nums">
-            {project.architecture.totalFiles} files · {project.architecture.edges.length} graph edges
+          <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-[var(--ink-primary)]">
+            {activeProject?.architecture.totalFiles ?? 0}{' '}
+            <span className="text-xs font-sans font-normal text-[var(--ink-muted)]">files</span>
           </div>
-        </div>
-
-        <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-1">
-          <div className="text-[12px] text-[#A3AABF]">Sandbox Verification</div>
-          <div className="text-[22px] font-semibold font-mono tabular-nums">
-            {latestRun ? (
-              <span className={latestRun.status === 'passed' ? 'text-[#3DD68C]' : 'text-[#FF5C6C]'}>
-                {latestRun.passedCount}/{latestRun.totalCount} passed
-              </span>
-            ) : (
-              <span className="text-[#A3AABF]">Not run yet</span>
-            )}
-          </div>
-          <div className="text-[12px] text-[#6B728A] tabular-nums">
-            {latestRun
-              ? `${latestRun.durationMs}ms${latestRun.coverage ? ` · ${latestRun.coverage.linePercent.toFixed(1)}% line coverage` : ''} · ${latestRun.sandboxId}`
-              : 'Run baseline tests in isolated sandbox'}
+          <div className="mt-1 text-[11px] font-mono tabular-nums text-[var(--ink-muted)]">
+            {activeProject?.architecture.totalSymbols ?? 0} symbols · {activeProject?.architecture.totalLines ?? 0} LOC
           </div>
         </div>
 
-        <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-1">
-          <div className="text-[12px] text-[#A3AABF]">Open Security Findings</div>
-          <div className="text-[22px] font-semibold font-mono tabular-nums">
-            <span className={safeFindings.length > 0 ? 'text-[#FF7A45]' : 'text-[#3DD68C]'}>
-              {safeFindings.length}
+        <button
+          type="button"
+          onClick={() => onNavigate('extensions')}
+          className="text-left p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] hover:border-[var(--accent-primary)] transition-colors"
+        >
+          <div className="flex items-center justify-between text-xs text-[var(--ink-secondary)]">
+            <span>Extension Host</span>
+            <Blocks className="w-4 h-4 text-[var(--accent-primary)]" />
+          </div>
+          <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-[var(--ink-primary)]">
+            {activeExtensionsCount}{' '}
+            <span className="text-xs font-sans font-normal text-[var(--ink-muted)]">
+              active / {installedExtensions.length} installed
             </span>
           </div>
-          <div className="text-[12px] text-[#6B728A] tabular-nums">
-            {criticalCount} critical · {highCount} high · {usage?.secretsRedactedTotal ?? 0} secrets scrubbed
+          <div className="mt-1 text-[11px] font-mono tabular-nums text-[var(--ink-muted)]">
+            {extensionHost?.activeCommands.length ?? 0} commands · {extensionHost?.diagnostics.length ?? 0} diagnostics
           </div>
-        </div>
+        </button>
 
-        <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-1">
-          <div className="text-[12px] text-[#A3AABF]">Policy & Token Spend</div>
-          <div className="text-[22px] font-semibold text-[#E6E9F2] font-mono tabular-nums">
+        <button
+          type="button"
+          onClick={() => onNavigate('security')}
+          className="text-left p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] hover:border-[var(--accent-primary)] transition-colors"
+        >
+          <div className="flex items-center justify-between text-xs text-[var(--ink-secondary)]">
+            <span>Static Security Scan</span>
+            {openSecurityFindings.length > 0 ? (
+              <ShieldAlert className="w-4 h-4 text-[var(--status-danger)]" />
+            ) : (
+              <ShieldCheck className="w-4 h-4 text-[var(--status-success)]" />
+            )}
+          </div>
+          <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-[var(--ink-primary)]">
+            {openSecurityFindings.length}{' '}
+            <span className="text-xs font-sans font-normal text-[var(--ink-muted)]">open findings</span>
+          </div>
+          <div className="mt-1 text-[11px] font-mono tabular-nums text-[var(--ink-muted)]">
+            {usage?.secretsRedactedTotal ?? 0} secrets redacted · {usage?.unauthorizedActionsBlocked ?? 0} blocked
+          </div>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => onNavigate('settings')}
+          className="text-left p-4 rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] hover:border-[var(--accent-primary)] transition-colors"
+        >
+          <div className="flex items-center justify-between text-xs text-[var(--ink-secondary)]">
+            <span>Monthly Spend Guard</span>
+            <Wallet className="w-4 h-4 text-[var(--accent-primary)]" />
+          </div>
+          <div className="mt-2 text-2xl font-semibold font-mono tabular-nums text-[var(--ink-primary)]">
             ${(usage?.spentUsd ?? 0).toFixed(4)}
           </div>
-          <div className="text-[12px] text-[#6B728A] tabular-nums">
-            0 unauthorized actions · {(usage?.tokensUsed ?? 0).toLocaleString()} tokens
+          <div className="mt-2 h-1.5 w-full rounded-full bg-[var(--surface-subtle)] overflow-hidden">
+            <div
+              className="h-full bg-[var(--accent-primary)]"
+              style={{ width: `${spendPercent}%` }}
+            />
           </div>
-        </div>
+          <div className="mt-1 text-[11px] font-mono tabular-nums text-[var(--ink-muted)]">
+            {spendPercent}% of ${(usage?.monthlyBudgetUsd ?? 25).toFixed(2)} cap
+          </div>
+        </button>
       </div>
 
-      {/* Main 2-Column Workspace Overview */}
+      {/* Main Two-Column Section */}
       <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        {/* Left: Active Verification & Security Overview */}
+        {/* Left Column: Repositories + Recent Engineering Tasks */}
         <div className="xl:col-span-7 space-y-5">
-          {/* End-to-End Milestone Workflow Card */}
-          <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-[15px] font-semibold text-[#E6E9F2]">
-                  End-to-End Verification Pipeline
+          {/* Workspace Repositories */}
+          <section className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)]">
+            <div className="px-4 py-3 border-b border-[var(--border-hairline)] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderGit2 className="w-4 h-4 text-[var(--accent-primary)]" />
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)]">
+                  Workspace Repositories ({projects.length})
                 </h2>
-                <p className="text-[12px] text-[#A3AABF] mt-0.5">
-                  Completion is strictly gated on passing sandbox tests and explicit developer approval.
-                </p>
               </div>
               <button
-                onClick={() => void onRunSandboxTests()}
-                disabled={runningTests}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium bg-[#1C2030] hover:bg-[#262B3A] text-[#E6E9F2] border border-[#353B50] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
+                type="button"
+                onClick={() => onNavigate('explorer')}
+                className="text-xs text-[var(--accent-primary)] hover:underline inline-flex items-center gap-1"
               >
-                <Terminal className="w-3.5 h-3.5 text-[#3DD68C]" />
-                <span>{runningTests ? 'Executing...' : 'Run Baseline Tests'}</span>
+                Open Editor <ArrowRight className="w-3 h-3" />
               </button>
             </div>
 
-            {latestRun ? (
-              <div className="divide-y divide-[#262B3A] border border-[#262B3A] rounded-[8px] bg-[#0F1117]">
-                {latestRun.cases.map((tc, i) => (
-                  <div key={i} className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-[12px]">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {tc.status === 'pass' ? (
-                        <CheckCircle2 className="w-4 h-4 text-[#3DD68C] shrink-0" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-[#FF5C6C] shrink-0" />
-                      )}
-                      <span className="text-[#E6E9F2] truncate">{tc.name}</span>
+            <div className="divide-y divide-[var(--border-hairline)]">
+              {Array.from(new Map(projects.map((p) => [p.id, p])).values()).map((proj) => {
+                const isSelected = activeProject?.id === proj.id;
+                return (
+                  <button
+                    key={proj.id}
+                    type="button"
+                    onClick={() => onSelectProject(proj.id)}
+                    className={`w-full px-4 py-3 text-left flex items-center justify-between gap-4 transition-colors ${
+                      isSelected ? 'bg-[var(--surface-active)]' : 'hover:bg-[var(--surface-hover)]'
+                    }`}
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-[var(--ink-primary)] truncate">
+                          {proj.name}
+                        </span>
+                        <span className="text-[11px] font-mono text-[var(--ink-muted)]">
+                          {proj.framework} · {proj.primaryLanguage}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[var(--ink-secondary)] truncate mt-0.5">
+                        {proj.localPath}
+                      </p>
                     </div>
-                    <span className="font-mono text-[11px] text-[#6B728A] tabular-nums shrink-0">
-                      {tc.status.toUpperCase()} · {tc.durationMs}ms
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="p-4 rounded-[8px] bg-[#0F1117] border border-[#262B3A] text-[12px] text-[#A3AABF]">
-                Click <span className="text-[#E6E9F2] font-medium">Run Baseline Tests</span> to execute{' '}
-                <span className="font-mono text-[#E6E9F2]">tests/*.test.ts</span> inside a clean ephemeral sandbox and capture real failing test assertions before dispatching the autonomous agent.
-              </div>
-            )}
+                    <div className="text-right shrink-0 font-mono text-[11px] tabular-nums text-[var(--ink-muted)]">
+                      <div>{proj.files.length} files</div>
+                      <div>{proj.symbols.length} symbols</div>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
           </section>
 
-          {/* Recent Agent Tasks */}
-          <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-[15px] font-semibold text-[#E6E9F2]">
-                Recent Autonomous Tasks
+          {/* Recent Engineering Tasks with Priority Indicator & Filter */}
+          <section className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)]">
+            <div className="px-4 py-3 border-b border-[var(--border-hairline)] flex items-center justify-between gap-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)]">
+                Recent Engineering Tasks
               </h2>
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 <select
-                  aria-label="Filter recent tasks by priority"
+                  aria-label="Filter dashboard tasks by priority"
                   value={priorityFilter}
                   onChange={(e) => setPriorityFilter(e.target.value as 'all' | TaskPriority)}
-                  className="bg-[#0F1117] border border-[#262B3A] focus:border-[#5B7CFF] text-[#E6E9F2] text-[11px] rounded-[5px] px-2 py-1 outline-none"
+                  className="h-7 px-2 text-xs rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
                 >
                   <option value="all">All Priorities</option>
-                  <option value="high">High</option>
-                  <option value="medium">Medium</option>
-                  <option value="low">Low</option>
+                  <option value="high">High Priority</option>
+                  <option value="medium">Medium Priority</option>
+                  <option value="low">Low Priority</option>
                 </select>
                 <button
+                  type="button"
                   onClick={() => onNavigate('history')}
-                  className="flex items-center gap-1 text-[12px] text-[#8793FF] hover:underline whitespace-nowrap"
+                  className="text-xs text-[var(--accent-primary)] hover:underline"
                 >
-                  <span>View all ({filteredTasks.length})</span>
-                  <ArrowUpRight className="w-3.5 h-3.5" />
+                  View All
                 </button>
               </div>
             </div>
 
-            {safeTasks.length === 0 ? (
-              <p className="text-[12px] text-[#6B728A] py-3">
-                No autonomous tasks executed yet. Launch a task from the right-hand AI panel or click{' '}
-                <span className="text-[#E6E9F2]">Run Autonomous Security Fix</span> above.
-              </p>
-            ) : filteredTasks.length === 0 ? (
-              <p className="text-[12px] text-[#6B728A] py-3">
-                No <span className="text-[#E6E9F2] capitalize">{priorityFilter}</span> priority tasks in this project.
-              </p>
+            {filteredTasks.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-[var(--ink-muted)]">
+                No tasks matching the selected priority level yet. Create a task in the right workbench panel.
+              </div>
             ) : (
-              <div className="divide-y divide-[#262B3A] border-t border-[#262B3A]">
-                {filteredTasks.slice(0, 5).map((t) => {
-                  const p: TaskPriority =
-                    t.priority === 'high' || t.priority === 'medium' || t.priority === 'low'
-                      ? t.priority
-                      : 'medium';
-                  const pStyle = PRIORITY_STYLE[p];
+              <div className="divide-y divide-[var(--border-hairline)]">
+                {filteredTasks.map((task) => {
+                  const p = PRIORITY_STYLES[task.priority || 'medium'];
                   return (
-                    <button
-                      key={t.id}
-                      onClick={() => onSelectTask(t)}
-                      className="w-full flex items-center justify-between gap-4 py-3 text-left hover:bg-[#1C2030]/40 px-2 -mx-2 rounded-[6px] transition-colors duration-120"
+                    <div
+                      key={task.id}
+                      className="px-4 py-2.5 flex items-center justify-between gap-4 hover:bg-[var(--surface-hover)] transition-colors"
                     >
                       <div className="min-w-0">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <span
-                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[4px] font-mono text-[10px] font-semibold uppercase border shrink-0"
-                            style={{
-                              color: pStyle.color,
-                              backgroundColor: pStyle.bg,
-                              borderColor: pStyle.border,
-                            }}
-                          >
-                            <span
-                              className="w-1.5 h-1.5 rounded-full"
-                              style={{ backgroundColor: pStyle.color }}
-                            />
-                            {pStyle.label}
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[11px] font-semibold uppercase font-mono ${p.color}`}>
+                            {p.label}
                           </span>
-                          <span className="text-[13px] font-medium text-[#E6E9F2] truncate">{t.title}</span>
+                          <span className="text-xs font-medium text-[var(--ink-primary)] truncate">
+                            {task.title}
+                          </span>
                         </div>
-                        <div className="text-[11px] text-[#6B728A] font-mono tabular-nums mt-1">
-                          {t.changes.length} file patch(es) · {(t.promptTokens + t.completionTokens).toLocaleString()} tokens · ${t.actualCostUsd.toFixed(5)}
+                        <div className="text-[11px] text-[var(--ink-muted)] mt-0.5 font-mono tabular-nums">
+                          {task.status.replace('_', ' ')} · {task.changes.length} patch(es) ·{' '}
+                          {new Date(task.createdAt).toLocaleTimeString()}
                         </div>
                       </div>
-                      <span className="font-mono text-[11px] text-[#A3AABF] shrink-0 uppercase">
-                        {t.status.replace('_', ' ')}
-                      </span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('history')}
+                        className="text-xs text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] shrink-0"
+                      >
+                        Inspect
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -314,118 +360,113 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </section>
         </div>
 
-        {/* Right: Connected Repositories, Security Highlights & Budget Meter */}
+        {/* Right Column: Active Extensions & Workspace Commands + Security Highlights */}
         <div className="xl:col-span-5 space-y-5">
-          {/* Workspace Projects */}
-          <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold text-[#E6E9F2]">Workspace Repositories</h2>
-              <span className="text-[12px] text-[#6B728A] tabular-nums">{safeProjects.length} connected</span>
-            </div>
-            <div className="divide-y divide-[#262B3A]">
-              {safeProjects.map((p) => {
-                const isCurrent = p.id === project.id;
-                return (
-                  <button
-                    key={p.id}
-                    onClick={() => onSelectProject(p.id)}
-                    className={`w-full flex items-center justify-between py-2.5 px-2.5 -mx-2.5 rounded-[6px] text-left transition-colors duration-120 ${
-                      isCurrent ? 'bg-[#1C2030] text-[#E6E9F2]' : 'hover:bg-[#1C2030]/50 text-[#A3AABF]'
-                    }`}
-                  >
-                    <div className="min-w-0">
-                      <div className="font-mono text-[13px] font-medium text-[#E6E9F2] truncate">
-                        {p.name}
-                      </div>
-                      <div className="text-[11px] text-[#6B728A] tabular-nums">
-                        {p.primaryLanguage} · {p.files.length} files · {p.symbols.length} symbols
-                      </div>
-                    </div>
-                    {isCurrent && (
-                      <span className="text-[11px] font-medium text-[#6C7BFF] shrink-0">Active</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
-
-          {/* Security Alerts Preview */}
-          <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold text-[#E6E9F2]">Static Security Findings</h2>
+          {/* Active Extensions & Workspace Commands */}
+          <section className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)]">
+            <div className="px-4 py-3 border-b border-[var(--border-hairline)] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Blocks className="w-4 h-4 text-[var(--accent-primary)]" />
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)]">
+                  Extension Quick Commands
+                </h2>
+              </div>
               <button
-                onClick={() => onNavigate('security')}
-                className="text-[12px] text-[#8793FF] hover:underline"
+                type="button"
+                onClick={() => onNavigate('extensions')}
+                className="text-xs text-[var(--accent-primary)] hover:underline"
               >
-                Open Security Center
+                Manage
               </button>
             </div>
-            {safeFindings.length === 0 ? (
-              <p className="text-[12px] text-[#3DD68C]">
-                Zero open security findings detected in {project.name}.
-              </p>
+
+            {workspaceCommands.length === 0 ? (
+              <div className="px-4 py-6 text-xs text-[var(--ink-muted)]">
+                Enable workspace extensions in the Marketplace to trigger live workspace scans and utilities.
+              </div>
             ) : (
-              <div className="space-y-2">
-                {safeFindings.slice(0, 4).map((f) => (
-                  <div key={f.id} className="flex items-start gap-2.5 text-[12px]">
-                    <ShieldAlert
-                      className="w-4 h-4 shrink-0 mt-0.5"
-                      style={{
-                        color:
-                          f.severity === 'critical'
-                            ? '#FF3B4E'
-                            : f.severity === 'high'
-                              ? '#FF7A45'
-                              : '#F5B84B',
-                      }}
-                    />
+              <div className="divide-y divide-[var(--border-hairline)]">
+                {workspaceCommands.map((cmd) => (
+                  <div
+                    key={cmd.id}
+                    className="px-4 py-2.5 flex items-center justify-between gap-3"
+                  >
                     <div className="min-w-0">
-                      <div className="text-[#E6E9F2] font-medium truncate">{f.title}</div>
-                      <div className="font-mono text-[11px] text-[#6B728A]">
-                        {f.filePath}:{f.line} · {f.cwe} · {f.severity}
+                      <div className="text-xs font-medium text-[var(--ink-primary)] truncate">
+                        {cmd.category}: {cmd.title}
+                      </div>
+                      <div className="text-[11px] text-[var(--ink-muted)] truncate">
+                        {cmd.extensionName}
                       </div>
                     </div>
+                    <button
+                      type="button"
+                      disabled={runningCmd !== null}
+                      onClick={() => handleRunWorkspaceCmd(cmd.id)}
+                      className="h-7 px-2.5 text-[11px] font-medium rounded-[3px] border border-[var(--border-strong)] bg-[var(--surface-canvas)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40 inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Play className="w-3 h-3 text-[var(--accent-primary)]" />
+                      {runningCmd === cmd.id ? 'Running...' : 'Run'}
+                    </button>
                   </div>
                 ))}
               </div>
             )}
           </section>
 
-          {/* Cost & Budget Guardrails (Section 15) */}
-          <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-[15px] font-semibold text-[#E6E9F2]">Usage & Budget Guard</h2>
+          {/* Security Highlights */}
+          <section className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)]">
+            <div className="px-4 py-3 border-b border-[var(--border-hairline)] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4 text-[var(--status-danger)]" />
+                <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-primary)]">
+                  Open Security Findings ({openSecurityFindings.length})
+                </h2>
+              </div>
               <button
-                onClick={() => onNavigate('settings')}
-                className="text-[12px] text-[#8793FF] hover:underline"
+                type="button"
+                onClick={() => onNavigate('security')}
+                className="text-xs text-[var(--accent-primary)] hover:underline"
               >
-                Configure limits
+                Security Center
               </button>
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-[12px] font-mono tabular-nums">
-                <span className="text-[#A3AABF]">
-                  ${(usage?.spentUsd ?? 0).toFixed(5)} / ${(usage?.monthlyBudgetUsd ?? 25).toFixed(2)}
-                </span>
-                <span className="text-[#E6E9F2]">{spendPct}%</span>
+            {openSecurityFindings.length === 0 ? (
+              <div className="px-4 py-6 text-xs text-[var(--status-success)] flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4" />
+                Zero open security findings in this repository.
               </div>
-              <div className="h-2 rounded-full bg-[#0F1117] overflow-hidden border border-[#262B3A]">
-                <div
-                  className="h-full transition-all duration-300"
-                  style={{
-                    width: `${Math.max(2, spendPct)}%`,
-                    backgroundColor:
-                      spendPct >= 100 ? '#FF5C6C' : spendPct >= 80 ? '#F5B84B' : '#6C7BFF',
-                  }}
-                />
+            ) : (
+              <div className="divide-y divide-[var(--border-hairline)]">
+                {openSecurityFindings.slice(0, 5).map((finding) => (
+                  <button
+                    key={finding.id}
+                    type="button"
+                    onClick={() => onOpenFileLine(finding.filePath, finding.line)}
+                    className="w-full px-4 py-2.5 text-left hover:bg-[var(--surface-hover)] flex items-start justify-between gap-3 transition-colors"
+                  >
+                    <div className="min-w-0">
+                      <div className="text-xs font-medium text-[var(--ink-primary)] truncate">
+                        {finding.title}
+                      </div>
+                      <div className="text-[11px] font-mono text-[var(--ink-muted)] mt-0.5">
+                        {finding.filePath}:{finding.line} · {finding.cwe}
+                      </div>
+                    </div>
+                    <span
+                      className={`text-[11px] font-mono uppercase shrink-0 ${
+                        finding.severity === 'critical' || finding.severity === 'high'
+                          ? 'text-[var(--status-danger)]'
+                          : 'text-[var(--status-warning)]'
+                      }`}
+                    >
+                      {finding.severity}
+                    </span>
+                  </button>
+                ))}
               </div>
-              <div className="flex items-center justify-between text-[11px] text-[#6B728A] tabular-nums pt-1">
-                <span>Plan: {usage?.planName ?? 'Pro'} · Alerts at 80% & 100%</span>
-                <span>{completedTasks} verified tasks</span>
-              </div>
-            </div>
+            )}
           </section>
         </div>
       </div>

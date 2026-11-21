@@ -1,624 +1,456 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
-  AlertTriangle,
-  Bot,
   CheckCircle2,
   Clock,
   FileDiff,
-  KeyRound,
-  Lock,
+  Loader2,
   MessageSquare,
-  Play,
   RotateCcw,
   Send,
-  ShieldAlert,
+  ShieldCheck,
+  TerminalSquare,
   XCircle,
 } from 'lucide-react';
 import type {
   AgentTask,
   ChatMessage,
   CodeChange,
-  Project,
+  CodeCitation,
   PublicUserSession,
   TaskPriority,
-  TaskStatus,
 } from '../types/devmind';
 
 interface AiWorkspacePanelProps {
-  project: Project;
   session: PublicUserSession;
-  activeTask: AgentTask | null;
+  activeProjectName: string;
+  tasks: AgentTask[];
   chatMessages: ChatMessage[];
-  agentBusy: boolean;
-  chatBusy: boolean;
-  draftTaskPrompt: string;
-  onDraftTaskPromptChange: (v: string) => void;
-  onStartTask: (
+  onCreateTask: (
     title: string,
     description: string,
-    executionMode: 'approval' | 'strict_sandbox',
+    executionMode: 'approval' | 'direct',
     priority: TaskPriority
   ) => Promise<void>;
   onDecideApproval: (approvalId: string, decision: 'approve' | 'reject') => Promise<void>;
   onRollbackTask: (taskId: string) => Promise<void>;
+  onCancelTask: (taskId: string) => Promise<void>;
   onSendChat: (message: string) => Promise<void>;
-  onInspectDiff: (change: CodeChange) => void;
-  onOpenFileAtLine: (filePath: string, line?: number) => void;
-  onOpenLlmSettings: () => void;
+  onOpenDiff: (change: CodeChange) => void;
+  onOpenCitation: (citation: CodeCitation) => void;
 }
 
-const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
-  pending: { label: 'Pending', color: '#8A93AD' },
-  planning: { label: 'Planning', color: '#4DB8FF' },
-  awaiting_approval: { label: 'Awaiting Approval', color: '#F5B642' },
-  running: { label: 'Running', color: '#5B7CFF' },
-  testing: { label: 'Testing', color: '#B38CFF' },
-  completed: { label: 'Completed', color: '#2FD68B' },
-  failed: { label: 'Failed', color: '#FF5468' },
-  cancelled: { label: 'Cancelled', color: '#6B728A' },
+const PRIORITY_TONE: Record<TaskPriority, string> = {
+  high: 'text-[var(--status-danger)]',
+  medium: 'text-[var(--status-warning)]',
+  low: 'text-[var(--status-success)]',
 };
-
-const PRIORITY_COLORS: Record<TaskPriority, { label: string; color: string }> = {
-  high: { label: 'High', color: '#FF5468' },
-  medium: { label: 'Medium', color: '#F5B642' },
-  low: { label: 'Low', color: '#4DB8FF' },
-};
-
-function formatCountdown(expiresAt: string): string {
-  const diff = Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
-  const mins = Math.floor(diff / 60);
-  const secs = diff % 60;
-  return `${mins}:${secs.toString().padStart(2, '0')}`;
-}
 
 export const AiWorkspacePanel: React.FC<AiWorkspacePanelProps> = ({
-  project,
   session,
-  activeTask,
+  activeProjectName,
+  tasks,
   chatMessages,
-  agentBusy,
-  chatBusy,
-  draftTaskPrompt,
-  onDraftTaskPromptChange,
-  onStartTask,
+  onCreateTask,
   onDecideApproval,
   onRollbackTask,
+  onCancelTask,
   onSendChat,
-  onInspectDiff,
-  onOpenFileAtLine,
-  onOpenLlmSettings,
+  onOpenDiff,
+  onOpenCitation,
 }) => {
-  const safeMessages = Array.isArray(chatMessages) ? chatMessages : [];
-  const safeApprovals = Array.isArray(activeTask?.approvals) ? activeTask.approvals : [];
-  const safeSteps = Array.isArray(activeTask?.steps) ? activeTask.steps : [];
-  const safeChanges = Array.isArray(activeTask?.changes) ? activeTask.changes : [];
-  const llmConfigured = Boolean(session?.llm?.configured);
-
-  const [tab, setTab] = useState<'agent' | 'chat'>('agent');
-  const [executionMode, setExecutionMode] = useState<'approval' | 'strict_sandbox'>('approval');
-  const [taskPriority, setTaskPriority] = useState<TaskPriority>('medium');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'chat'>('tasks');
+  const [taskPrompt, setTaskPrompt] = useState('');
+  const [executionMode, setExecutionMode] = useState<'approval' | 'direct'>('approval');
+  const [priority, setPriority] = useState<TaskPriority>('medium');
+  const [priorityFilter, setPriorityFilter] = useState<'all' | TaskPriority>('all');
   const [chatInput, setChatInput] = useState('');
-  const [decidingId, setDecidingId] = useState<string | null>(null);
-  const [rollingBack, setRollingBack] = useState(false);
-  const [, setTick] = useState(0);
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [actionBusyId, setActionBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const hasPending = safeApprovals.some((a) => a.status === 'pending');
-    if (!hasPending) return;
-    const id = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(id);
-  }, [safeApprovals]);
+  const safeTasks = Array.isArray(tasks) ? tasks : [];
+  const safeChat = Array.isArray(chatMessages) ? chatMessages : [];
 
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [safeMessages.length, chatBusy]);
+  const filteredTasks = useMemo(() => {
+    if (priorityFilter === 'all') return safeTasks;
+    return safeTasks.filter((t) => (t.priority || 'medium') === priorityFilter);
+  }, [safeTasks, priorityFilter]);
 
-  const handleTaskSubmit = async () => {
-    const trimmed = draftTaskPrompt.trim();
-    if (!trimmed || agentBusy) return;
-    const title = trimmed.length > 64 ? `${trimmed.slice(0, 61)}...` : trimmed;
-    await onStartTask(title, trimmed, executionMode, taskPriority);
+  const handleTaskSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = taskPrompt.trim();
+    if (!trimmed || submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      const title = trimmed.length > 70 ? `${trimmed.slice(0, 67)}...` : trimmed;
+      await onCreateTask(title, trimmed, executionMode, priority);
+      setTaskPrompt('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to execute engineering task.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const handleChatSubmit = async () => {
+  const handleChatSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     const trimmed = chatInput.trim();
-    if (!trimmed || chatBusy) return;
-    setChatInput('');
-    await onSendChat(trimmed);
+    if (!trimmed || submitting) return;
+    setError(null);
+    setSubmitting(true);
+    try {
+      await onSendChat(trimmed);
+      setChatInput('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to send repository query.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleApproval = async (approvalId: string, decision: 'approve' | 'reject') => {
-    setDecidingId(approvalId);
+    setActionBusyId(approvalId);
+    setError(null);
     try {
       await onDecideApproval(approvalId, decision);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Approval action failed.');
     } finally {
-      setDecidingId(null);
+      setActionBusyId(null);
     }
   };
-
-  const handleRollback = async (taskId: string) => {
-    setRollingBack(true);
-    try {
-      await onRollbackTask(taskId);
-    } finally {
-      setRollingBack(false);
-    }
-  };
-
-  const pendingApprovals = safeApprovals.filter((a) => a.status === 'pending');
 
   return (
-    <aside className="flex flex-col h-full bg-[#10131C] border-l border-[#1E2433]">
-      {/* Mode Switch + Active User BYOK Model */}
-      <div className="flex items-center justify-between px-3 h-10 border-b border-[#1E2433] shrink-0 gap-2">
-        <div className="flex items-center gap-1 bg-[#090B10] p-0.5 rounded-[6px] border border-[#1E2433]">
+    <aside className="h-full flex flex-col bg-[var(--surface-sidebar)] border-l border-[var(--border-hairline)] overflow-hidden">
+      {/* Header Tabs */}
+      <div className="h-10 px-3 border-b border-[var(--border-hairline)] bg-[var(--surface-chrome)] flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => setTab('agent')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium rounded-[5px] transition-colors whitespace-nowrap ${
-              tab === 'agent'
-                ? 'bg-[#161A26] text-[#E6E9F2]'
-                : 'text-[#A3AABF] hover:text-[#E6E9F2]'
+            onClick={() => setActiveTab('tasks')}
+            className={`h-10 text-xs font-medium border-b-2 inline-flex items-center gap-1.5 transition-colors ${
+              activeTab === 'tasks'
+                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
+                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
             }`}
           >
-            <Bot className="w-3.5 h-3.5 text-[#5B7CFF]" />
-            <span>Agent</span>
+            <TerminalSquare className="w-3.5 h-3.5" />
+            Tasks
+            <span className="font-mono tabular-nums text-[11px] text-[var(--ink-muted)]">
+              {safeTasks.length}
+            </span>
           </button>
+
           <button
             type="button"
-            onClick={() => setTab('chat')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 text-[12px] font-medium rounded-[5px] transition-colors whitespace-nowrap ${
-              tab === 'chat'
-                ? 'bg-[#161A26] text-[#E6E9F2]'
-                : 'text-[#A3AABF] hover:text-[#E6E9F2]'
+            onClick={() => setActiveTab('chat')}
+            className={`h-10 text-xs font-medium border-b-2 inline-flex items-center gap-1.5 transition-colors ${
+              activeTab === 'chat'
+                ? 'border-[var(--accent-primary)] text-[var(--ink-primary)]'
+                : 'border-transparent text-[var(--ink-secondary)] hover:text-[var(--ink-primary)]'
             }`}
           >
-            <MessageSquare className="w-3.5 h-3.5 text-[#4DB8FF]" />
-            <span>Repo Chat</span>
+            <MessageSquare className="w-3.5 h-3.5" />
+            Ask Repo
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={onOpenLlmSettings}
-          title="Configure your BYOK LLM provider & model"
-          className="font-mono text-[11px] text-[#A3AABF] hover:text-[#E6E9F2] truncate max-w-[140px]"
-        >
-          {llmConfigured ? session.llm.model : 'Connect LLM'}
-        </button>
+        <span className="text-[11px] font-mono text-[var(--ink-muted)] truncate max-w-[130px]" title={session.llm.model}>
+          {session.llm.configured ? session.llm.model : 'Local Rules'}
+        </span>
       </div>
 
-      {/* Notice if user entered Sandbox Mode without configuring BYOK LLM */}
-      {!llmConfigured && (
-        <div className="px-3 py-2.5 bg-[#F5B642]/10 border-b border-[#F5B642]/30 flex items-center justify-between gap-2 text-[12px] shrink-0">
-          <div className="flex items-center gap-2 text-[#F5B642] min-w-0">
-            <KeyRound className="w-3.5 h-3.5 shrink-0" />
-            <span className="truncate">Connect your LLM API to run AI agent & chat</span>
-          </div>
-          <button
-            type="button"
-            onClick={onOpenLlmSettings}
-            className="text-[11px] font-semibold text-[#E6E9F2] hover:underline whitespace-nowrap shrink-0"
-          >
-            Configure
+      {error && (
+        <div className="mx-3 mt-2.5 px-3 py-2 rounded-[4px] border border-[var(--status-danger)]/40 bg-[var(--status-danger)]/10 text-xs text-[var(--status-danger)] flex items-center justify-between gap-2 shrink-0">
+          <span className="truncate">{error}</span>
+          <button type="button" onClick={() => setError(null)} className="text-[11px] underline shrink-0">
+            Close
           </button>
         </div>
       )}
 
-      {tab === 'agent' ? (
-        <div className="flex-1 flex flex-col min-h-0">
+      {activeTab === 'tasks' ? (
+        <>
+          {/* Task Priority Filter Strip */}
+          <div className="px-3 py-2 border-b border-[var(--border-hairline)] flex items-center justify-between gap-2 shrink-0">
+            <span className="text-[11px] text-[var(--ink-muted)] truncate">
+              Repo: <span className="text-[var(--ink-primary)] font-medium">{activeProjectName}</span>
+            </span>
+            <select
+              aria-label="Filter tasks by priority"
+              value={priorityFilter}
+              onChange={(e) => setPriorityFilter(e.target.value as 'all' | TaskPriority)}
+              className="h-6 px-1.5 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
+            >
+              <option value="all">All Priorities</option>
+              <option value="high">High Priority</option>
+              <option value="medium">Medium Priority</option>
+              <option value="low">Low Priority</option>
+            </select>
+          </div>
+
+          {/* Task Stream */}
+          <div className="flex-1 overflow-y-auto p-3 space-y-3">
+            {filteredTasks.length === 0 ? (
+              <div className="py-8 px-3 text-center text-xs text-[var(--ink-muted)] border border-dashed border-[var(--border-hairline)] rounded-[4px]">
+                Describe a code change, refactor, or security remediation below to generate reviewed patches.
+              </div>
+            ) : (
+              filteredTasks.map((task) => {
+                const pendingApproval = task.approvals.find((a) => a.status === 'pending');
+                const taskPriority = task.priority || 'medium';
+
+                return (
+                  <div
+                    key={task.id}
+                    className="rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] overflow-hidden"
+                  >
+                    <div className="px-3 py-2.5 border-b border-[var(--border-hairline)]">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="text-xs font-semibold text-[var(--ink-primary)] leading-snug">
+                          {task.title}
+                        </div>
+                        <span
+                          className={`text-[10px] font-mono font-semibold uppercase shrink-0 ${PRIORITY_TONE[taskPriority]}`}
+                        >
+                          {taskPriority}
+                        </span>
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-[11px] font-mono text-[var(--ink-muted)]">
+                        <span>{task.status.replace('_', ' ')}</span>
+                        <span>·</span>
+                        <span>{task.executionMode === 'approval' ? 'Approval Gate' : 'Direct Apply'}</span>
+                        <span>·</span>
+                        <span className="tabular-nums">${task.actualCostUsd.toFixed(4)}</span>
+                      </div>
+                    </div>
+
+                    {/* Steps Summary */}
+                    {task.steps.length > 0 && (
+                      <div className="px-3 py-2 space-y-1 border-b border-[var(--border-hairline)] bg-[var(--surface-canvas)]">
+                        {task.steps.map((step) => (
+                          <div key={step.id} className="flex items-center justify-between gap-2 text-[11px]">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              {step.status === 'completed' ? (
+                                <CheckCircle2 className="w-3 h-3 text-[var(--status-success)] shrink-0" />
+                              ) : step.status === 'failed' ? (
+                                <XCircle className="w-3 h-3 text-[var(--status-danger)] shrink-0" />
+                              ) : (
+                                <Clock className="w-3 h-3 text-[var(--status-warning)] shrink-0" />
+                              )}
+                              <span className="text-[var(--ink-secondary)] truncate">{step.action}</span>
+                            </div>
+                            <span className="font-mono text-[10px] text-[var(--ink-muted)] shrink-0">
+                              {step.agentType}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Proposed / Applied File Patches */}
+                    {task.changes.length > 0 && (
+                      <div className="px-3 py-2 space-y-1 border-b border-[var(--border-hairline)]">
+                        {task.changes.map((chg) => (
+                          <button
+                            key={chg.id}
+                            type="button"
+                            onClick={() => onOpenDiff(chg)}
+                            className="w-full px-2 py-1 rounded-[3px] bg-[var(--surface-canvas)] hover:bg-[var(--surface-hover)] border border-[var(--border-hairline)] flex items-center justify-between gap-2 text-[11px] transition-colors"
+                          >
+                            <span className="inline-flex items-center gap-1.5 font-mono text-[var(--ink-primary)] truncate">
+                              <FileDiff className="w-3 h-3 text-[var(--accent-primary)] shrink-0" />
+                              {chg.filePath}
+                            </span>
+                            <span className="text-[10px] font-mono text-[var(--ink-muted)] shrink-0">
+                              {chg.status}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Approval Checkpoint */}
+                    {pendingApproval && (
+                      <div className="px-3 py-2.5 bg-[var(--surface-subtle)] border-b border-[var(--border-hairline)] space-y-2">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--ink-primary)]">
+                          <ShieldCheck className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+                          {pendingApproval.title}
+                        </div>
+                        <p className="text-[11px] text-[var(--ink-secondary)] leading-relaxed">
+                          {pendingApproval.summary}
+                        </p>
+                        <div className="flex items-center gap-2 pt-0.5">
+                          <button
+                            type="button"
+                            disabled={actionBusyId !== null}
+                            onClick={() => handleApproval(pendingApproval.id, 'approve')}
+                            className="flex-1 h-7 px-2.5 text-xs font-medium rounded-[3px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40"
+                          >
+                            {actionBusyId === pendingApproval.id ? 'Applying...' : 'Approve & Apply'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={actionBusyId !== null}
+                            onClick={() => handleApproval(pendingApproval.id, 'reject')}
+                            className="h-7 px-2.5 text-xs font-medium rounded-[3px] border border-[var(--border-strong)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-40"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Final Report / Rollback Actions */}
+                    <div className="px-3 py-2 flex items-center justify-between gap-2 text-[11px]">
+                      <span className="text-[var(--ink-secondary)] truncate">
+                        {task.finalReport?.summary || task.errorMessage || 'Ready'}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {task.rollbackSnapshot && !task.rollbackSnapshot.restored && (
+                          <button
+                            type="button"
+                            disabled={actionBusyId !== null}
+                            onClick={async () => {
+                              setActionBusyId(task.id);
+                              try {
+                                await onRollbackTask(task.id);
+                              } finally {
+                                setActionBusyId(null);
+                              }
+                            }}
+                            className="h-6 px-2 rounded-[3px] border border-[var(--border-strong)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            Rollback
+                          </button>
+                        )}
+                        {task.status === 'awaiting_approval' && (
+                          <button
+                            type="button"
+                            disabled={actionBusyId !== null}
+                            onClick={() => onCancelTask(task.id)}
+                            className="h-6 px-2 rounded-[3px] border border-[var(--border-hairline)] text-[var(--ink-muted)] hover:text-[var(--status-danger)]"
+                          >
+                            Cancel
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
           {/* Task Composer */}
-          <div className="p-3 border-b border-[#1E2433] space-y-2.5 shrink-0">
-            <label htmlFor="agent-objective" className="block text-[12px] font-medium text-[#E6E9F2]">
-              Engineering Objective
-            </label>
+          <form
+            onSubmit={handleTaskSubmit}
+            className="p-3 border-t border-[var(--border-hairline)] bg-[var(--surface-elevated)] space-y-2 shrink-0"
+          >
             <textarea
-              id="agent-objective"
+              value={taskPrompt}
+              onChange={(e) => setTaskPrompt(e.target.value)}
               rows={3}
-              value={draftTaskPrompt}
-              onChange={(e) => onDraftTaskPromptChange(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                  e.preventDefault();
-                  void handleTaskSubmit();
-                }
-              }}
-              placeholder="Describe the bug fix, refactor, or security task (Ctrl+Enter to run)..."
-              className="w-full bg-[#090B10] border border-[#262E42] focus:border-[#5B7CFF] rounded-[7px] p-2.5 text-[12px] text-[#E6E9F2] placeholder-[#6B728A] resize-none outline-none leading-relaxed"
+              placeholder="Describe a code patch, bug fix, or security hardening task..."
+              className="w-full p-2.5 text-xs rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] resize-none focus:outline-none focus:border-[var(--accent-primary)]"
             />
-
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <select
-                  aria-label="Execution mode"
-                  value={executionMode}
-                  onChange={(e) => setExecutionMode(e.target.value as 'approval' | 'strict_sandbox')}
-                  className="bg-[#090B10] border border-[#262E42] text-[#A3AABF] text-[11px] rounded-[6px] px-2 py-1.5 outline-none"
-                >
-                  <option value="approval">Approval</option>
-                  <option value="strict_sandbox">Sandbox</option>
-                </select>
-
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
                 <select
                   aria-label="Task priority"
-                  value={taskPriority}
-                  onChange={(e) => setTaskPriority(e.target.value as TaskPriority)}
-                  className="bg-[#090B10] border border-[#262E42] text-[#E6E9F2] text-[11px] rounded-[6px] px-2 py-1.5 outline-none"
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value as TaskPriority)}
+                  className="h-7 px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none"
                 >
-                  <option value="high">High Priority</option>
-                  <option value="medium">Medium Priority</option>
-                  <option value="low">Low Priority</option>
+                  <option value="high">High</option>
+                  <option value="medium">Medium</option>
+                  <option value="low">Low</option>
+                </select>
+                <select
+                  aria-label="Execution policy"
+                  value={executionMode}
+                  onChange={(e) => setExecutionMode(e.target.value as 'approval' | 'direct')}
+                  className="h-7 px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none"
+                >
+                  <option value="approval">Approval Gate</option>
+                  <option value="direct">Direct Apply</option>
                 </select>
               </div>
-
               <button
-                type="button"
-                onClick={() => void handleTaskSubmit()}
-                disabled={agentBusy || !draftTaskPrompt.trim()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold bg-[#5B7CFF] hover:bg-[#7C96FF] disabled:opacity-50 text-[#090B10] rounded-[6px] transition-colors whitespace-nowrap"
+                type="submit"
+                disabled={submitting || !taskPrompt.trim()}
+                className="h-7 px-3 text-xs font-medium rounded-[3px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5"
               >
-                <Play className="w-3.5 h-3.5" />
-                <span>{agentBusy ? 'Running...' : 'Run Task'}</span>
+                {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3 h-3" />}
+                Run Task
               </button>
             </div>
-
-            <div className="flex flex-wrap gap-1.5 pt-0.5">
-              <button
-                type="button"
-                onClick={() =>
-                  onDraftTaskPromptChange(
-                    project.id === 'proj-sentinel-auth'
-                      ? 'Analyze the entire authentication project, identify all security vulnerabilities and failing auth bugs (alg: none, timing comparison, exp=0, unsalted SHA-1, case-insensitive bearer header, token revocation, SQL interpolation, token logging), fix them, and verify all tests pass in the sandbox.'
-                      : 'Analyze tokenLedger.ts, fix the micro-dollar rounding precision bug and implement the 80% warning and 100% blocking budget guards so all unit tests pass in the sandbox.'
-                  )
-                }
-                className="text-[11px] text-[#7C96FF] hover:text-[#E6E9F2] underline underline-offset-2 text-left"
-              >
-                Load End-to-End Security & Test Fix Prompt
-              </button>
-            </div>
-          </div>
-
-          {/* Active Task Stream & Approval Checkpoint */}
-          <div className="flex-1 overflow-y-auto p-3 space-y-4">
-            {agentBusy && (
-              <div className="p-3 rounded-[10px] bg-[#161A26] border border-[#262E42] space-y-2">
-                <div className="text-[12px] text-[#4DB8FF] font-medium">
-                  Querying {session.llm.provider}/{session.llm.model} & synthesizing patches
-                  <span className="streaming-cursor" />
-                </div>
-                <div className="h-2 rounded skeleton-shimmer" />
-                <div className="h-2 w-3/4 rounded skeleton-shimmer" />
-              </div>
-            )}
-
-            {!activeTask && !agentBusy && (
-              <div className="py-10 px-4 text-center space-y-2">
-                <Lock className="w-6 h-6 mx-auto text-[#2B3347]" />
-                <p className="text-[13px] font-medium text-[#E6E9F2]">
-                  Permission-Controlled Autonomous Agent
-                </p>
-                <p className="text-[12px] text-[#6B728A] leading-relaxed">
-                  Powered by your connected LLM API. Every proposed workspace edit pauses at an
-                  approval checkpoint with unified diffs, rollback snapshots, and real sandbox V8
-                  test verification.
-                </p>
-              </div>
-            )}
-
-            {activeTask && (
-              <div className="space-y-4">
-                <div className="pb-3 border-b border-[#1E2433] space-y-1.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-[12px] font-semibold"
-                        style={{ color: STATUS_META[activeTask.status]?.color ?? '#A3AABF' }}
-                      >
-                        {STATUS_META[activeTask.status]?.label ?? activeTask.status}
-                      </span>
-                      <span className="text-[#6B728A]" aria-hidden="true">·</span>
-                      <span
-                        className="inline-flex items-center gap-1 font-mono text-[10px] font-semibold uppercase"
-                        style={{
-                          color: PRIORITY_COLORS[activeTask.priority ?? 'medium']?.color ?? '#F5B642',
-                        }}
-                      >
-                        <span
-                          className="w-1.5 h-1.5 rounded-full"
-                          style={{
-                            backgroundColor:
-                              PRIORITY_COLORS[activeTask.priority ?? 'medium']?.color ?? '#F5B642',
-                          }}
-                        />
-                        {PRIORITY_COLORS[activeTask.priority ?? 'medium']?.label ?? 'Medium'}
-                      </span>
-                    </div>
-                    <span className="font-mono text-[11px] text-[#6B728A] tabular-nums">
-                      actual ${(activeTask.actualCostUsd ?? 0).toFixed(5)}
-                    </span>
-                  </div>
-                  <p className="text-[13px] font-medium text-[#E6E9F2] leading-snug">
-                    {activeTask.title}
-                  </p>
-                  <p className="text-[11px] text-[#A3AABF] font-mono tabular-nums">
-                    {activeTask.modelProvider}/{activeTask.modelName} ·{' '}
-                    {((activeTask.promptTokens ?? 0) + (activeTask.completionTokens ?? 0)).toLocaleString()} tok
-                  </p>
-                </div>
-
-                {/* Pulsing Approval Checkpoint */}
-                {pendingApprovals.map((apr) => (
-                  <div
-                    key={apr.id}
-                    className="approval-card-pulse p-3.5 rounded-[10px] bg-[#161A26] border border-[#F5B642]/60 space-y-3"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-2 text-[#F5B642] font-semibold text-[12px]">
-                        <ShieldAlert className="w-4 h-4 shrink-0" />
-                        <span>Approval Checkpoint Required</span>
-                      </div>
-                      <span className="flex items-center gap-1 font-mono text-[11px] text-[#F5B642] tabular-nums shrink-0">
-                        <Clock className="w-3 h-3" />
-                        {formatCountdown(apr.expiresAt)}
-                      </span>
-                    </div>
-
-                    <p className="text-[12px] text-[#E6E9F2] leading-relaxed">{apr.summary}</p>
-
-                    <div className="space-y-1">
-                      <div className="text-[11px] text-[#6B728A] font-medium">
-                        Staged file patches (click to inspect diff):
-                      </div>
-                      {safeChanges.map((chg) => (
-                        <button
-                          key={chg.id}
-                          type="button"
-                          onClick={() => onInspectDiff(chg)}
-                          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-[6px] bg-[#090B10] hover:bg-[#1E2433] border border-[#262E42] text-left transition-colors"
-                        >
-                          <span className="flex items-center gap-2 font-mono text-[12px] text-[#7C96FF] truncate">
-                            <FileDiff className="w-3.5 h-3.5 shrink-0" />
-                            {chg.filePath}
-                          </span>
-                          <span className="text-[11px] text-[#A3AABF] shrink-0">Review</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={() => void handleApproval(apr.id, 'approve')}
-                        disabled={decidingId === apr.id}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-[12px] font-semibold bg-[#2FD68B] hover:bg-[#49e39e] disabled:opacity-60 text-[#090B10] rounded-[6px] transition-colors whitespace-nowrap"
-                      >
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>{decidingId === apr.id ? 'Verifying...' : 'Approve & Run Tests'}</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => void handleApproval(apr.id, 'reject')}
-                        disabled={decidingId === apr.id}
-                        className="px-3 py-2 text-[12px] font-medium bg-[#090B10] hover:bg-[#FF5468]/20 text-[#FF5468] border border-[#FF5468]/40 rounded-[6px] transition-colors whitespace-nowrap"
-                      >
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-                {/* Execution Steps */}
-                <div className="space-y-2">
-                  <h3 className="text-[12px] font-semibold text-[#A3AABF]">Execution Steps</h3>
-                  <div className="space-y-2">
-                    {safeSteps.map((step) => (
-                      <div
-                        key={step.id}
-                        className="p-2.5 rounded-[8px] bg-[#0B0E14] border border-[#1E2433] space-y-1"
-                      >
-                        <div className="flex items-center justify-between gap-2 text-[12px]">
-                          <span className="font-medium text-[#E6E9F2]">
-                            {step.stepNumber}. {step.action}
-                          </span>
-                          <span className="font-mono text-[11px] text-[#6B728A] tabular-nums shrink-0">
-                            {step.agentType}
-                            {step.durationMs ? ` · ${step.durationMs}ms` : ''}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-[#A3AABF] leading-relaxed">
-                          {step.outputSummary}
-                        </p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Applied Patch List */}
-                {pendingApprovals.length === 0 && safeChanges.length > 0 && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-[12px] font-semibold text-[#A3AABF]">File Changes</h3>
-                      {activeTask.rollbackSnapshot && !activeTask.rollbackSnapshot.restored && (
-                        <button
-                          type="button"
-                          onClick={() => void handleRollback(activeTask.id)}
-                          disabled={rollingBack}
-                          className="flex items-center gap-1 text-[11px] text-[#F5B642] hover:underline whitespace-nowrap"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          <span>{rollingBack ? 'Rolling back...' : 'Rollback Snapshot'}</span>
-                        </button>
-                      )}
-                    </div>
-                    <div className="space-y-1.5">
-                      {safeChanges.map((chg) => (
-                        <button
-                          key={chg.id}
-                          type="button"
-                          onClick={() => onInspectDiff(chg)}
-                          className="w-full flex items-center justify-between px-2.5 py-2 rounded-[6px] bg-[#0B0E14] hover:bg-[#161A26] border border-[#1E2433] text-left"
-                        >
-                          <span className="font-mono text-[12px] text-[#7C96FF] truncate">
-                            {chg.filePath}
-                          </span>
-                          <span className="text-[11px] text-[#A3AABF] shrink-0">{chg.status}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* Final Report */}
-                {activeTask.finalReport && activeTask.status !== 'awaiting_approval' && (
-                  <div
-                    className={`p-3 rounded-[10px] border space-y-2 ${
-                      activeTask.finalReport.verificationPassed
-                        ? 'bg-[#2FD68B]/10 border-[#2FD68B]/35'
-                        : 'bg-[#FF5468]/10 border-[#FF5468]/35'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2 text-[12px] font-semibold text-[#E6E9F2]">
-                      {activeTask.finalReport.verificationPassed ? (
-                        <CheckCircle2 className="w-4 h-4 text-[#2FD68B]" />
-                      ) : (
-                        <XCircle className="w-4 h-4 text-[#FF5468]" />
-                      )}
-                      <span>
-                        {activeTask.finalReport.verificationPassed
-                          ? 'Verified Engineering Report'
-                          : 'Verification Gate Failed'}
-                      </span>
-                    </div>
-                    <p className="text-[12px] text-[#E6E9F2] leading-relaxed">
-                      {activeTask.finalReport.summary}
-                    </p>
-                  </div>
-                )}
-
-                {activeTask.errorMessage && !activeTask.finalReport && (
-                  <div className="p-3 rounded-[8px] bg-[#FF5468]/10 border border-[#FF5468]/40 text-[12px] text-[#FF5468] flex items-start gap-2">
-                    <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                    <span>{activeTask.errorMessage}</span>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
+          </form>
+        </>
       ) : (
-        /* Repository-Aware RAG Chat */
-        <div className="flex-1 flex flex-col min-h-0">
+        <>
+          {/* Ask Repo Chat Thread */}
           <div className="flex-1 overflow-y-auto p-3 space-y-3">
-            {safeMessages.length === 0 && (
-              <div className="py-8 px-3 space-y-3">
-                <p className="text-[13px] font-medium text-[#E6E9F2]">
-                  Repository-Aware Engineering Chat
-                </p>
-                <p className="text-[12px] text-[#A3AABF] leading-relaxed">
-                  Ask questions grounded in <span className="font-mono text-[#E6E9F2]">{project.name}</span>.
-                  Responses route through your connected BYOK LLM with clickable file:line citations.
-                </p>
-                <div className="space-y-1.5 pt-2">
-                  {[
-                    'Explain the architecture and authentication request flow.',
-                    'Why are lowercase bearer tokens returning 401?',
-                    'List the critical security vulnerabilities in this repository.',
-                  ].map((sample) => (
-                    <button
-                      key={sample}
-                      type="button"
-                      onClick={() => void onSendChat(sample)}
-                      className="block w-full text-left px-3 py-2 rounded-[6px] bg-[#0B0E14] hover:bg-[#161A26] border border-[#1E2433] text-[12px] text-[#A3AABF] hover:text-[#E6E9F2] transition-colors"
-                    >
-                      {sample}
-                    </button>
-                  ))}
-                </div>
+            {safeChat.length === 0 ? (
+              <div className="py-8 px-3 text-center text-xs text-[var(--ink-muted)] border border-dashed border-[var(--border-hairline)] rounded-[4px]">
+                Ask questions about symbols, routes, dependencies, or security controls in {activeProjectName}.
               </div>
-            )}
-
-            {safeMessages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`p-3 rounded-[10px] text-[12px] leading-relaxed space-y-2 ${
-                  msg.role === 'user'
-                    ? 'bg-[#161A26] text-[#E6E9F2] ml-6 border border-[#2B3347]'
-                    : 'bg-[#0B0E14] text-[#E6E9F2] border border-[#1E2433]'
-                }`}
-              >
-                <div className="whitespace-pre-wrap">{msg.content}</div>
-
-                {Array.isArray(msg.citations) && msg.citations.length > 0 && (
-                  <div className="pt-2 border-t border-[#1E2433] space-y-1">
-                    <div className="text-[11px] text-[#6B728A]">Evidence citations:</div>
-                    <div className="flex flex-wrap gap-2">
-                      {msg.citations.map((c, idx) => (
+            ) : (
+              safeChat.map((msg) => (
+                <div
+                  key={msg.id}
+                  className={`p-3 rounded-[4px] border text-xs leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-[var(--accent-soft)] border-[var(--accent-primary)]/30 text-[var(--ink-primary)] ml-4'
+                      : 'bg-[var(--surface-elevated)] border-[var(--border-hairline)] text-[var(--ink-primary)] mr-2'
+                  }`}
+                >
+                  <div className="text-[10px] font-mono uppercase text-[var(--ink-muted)] mb-1 flex items-center justify-between">
+                    <span>{msg.role === 'user' ? session.displayName : msg.modelUsed || 'Workspace Assistant'}</span>
+                    {msg.tokensUsed ? <span className="tabular-nums">{msg.tokensUsed} tok</span> : null}
+                  </div>
+                  <div className="whitespace-pre-wrap">{msg.content}</div>
+                  {msg.citations && msg.citations.length > 0 && (
+                    <div className="mt-2 pt-2 border-t border-[var(--border-hairline)] flex flex-wrap gap-1.5">
+                      {msg.citations.map((cit, i) => (
                         <button
-                          key={`${c.filePath}:${c.startLine}:${idx}`}
+                          key={`${cit.filePath}:${cit.startLine}:${i}`}
                           type="button"
-                          onClick={() => onOpenFileAtLine(c.filePath, c.startLine)}
-                          className="font-mono text-[11px] text-[#7C96FF] hover:underline"
+                          onClick={() => onOpenCitation(cit)}
+                          className="px-2 py-0.5 text-[11px] font-mono rounded-[3px] border border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--accent-primary)] hover:border-[var(--accent-primary)]"
                         >
-                          {c.filePath}:{c.startLine}
+                          {cit.filePath}:{cit.startLine}
                         </button>
                       ))}
                     </div>
-                  </div>
-                )}
-
-                {msg.role === 'assistant' && (
-                  <div className="flex items-center justify-between text-[11px] text-[#6B728A] font-mono tabular-nums pt-1">
-                    <span>
-                      {(msg.tokensUsed ?? 0).toLocaleString()} tok · ${(msg.costUsd ?? 0).toFixed(5)}
-                    </span>
-                    {(msg.redactedSecretsCount ?? 0) > 0 && (
-                      <span className="text-[#F5B642]">
-                        {msg.redactedSecretsCount} secret redacted
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-            ))}
-
-            {chatBusy && (
-              <div className="p-3 rounded-[10px] bg-[#0B0E14] border border-[#1E2433] text-[12px] text-[#4DB8FF]">
-                Querying {session.llm.provider}/{session.llm.model}
-                <span className="streaming-cursor" />
-              </div>
+                  )}
+                </div>
+              ))
             )}
-            <div ref={chatEndRef} />
           </div>
 
-          <div className="p-3 border-t border-[#1E2433] shrink-0">
-            <div className="flex items-center gap-2">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    void handleChatSubmit();
-                  }
-                }}
-                placeholder="Ask about architecture, bugs, symbols..."
-                className="flex-1 bg-[#090B10] border border-[#262E42] focus:border-[#5B7CFF] rounded-[7px] px-3 py-2 text-[12px] text-[#E6E9F2] placeholder-[#6B728A] outline-none"
-              />
-              <button
-                type="button"
-                onClick={() => void handleChatSubmit()}
-                disabled={chatBusy || !chatInput.trim()}
-                aria-label="Send message"
-                className="p-2 bg-[#5B7CFF] hover:bg-[#7C96FF] disabled:opacity-50 text-[#090B10] rounded-[7px] transition-colors"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
-        </div>
+          <form
+            onSubmit={handleChatSubmit}
+            className="p-3 border-t border-[var(--border-hairline)] bg-[var(--surface-elevated)] flex items-center gap-2 shrink-0"
+          >
+            <input
+              type="text"
+              value={chatInput}
+              onChange={(e) => setChatInput(e.target.value)}
+              placeholder="Ask about this repository..."
+              className="flex-1 h-8 px-2.5 text-xs rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] focus:outline-none focus:border-[var(--accent-primary)]"
+            />
+            <button
+              type="submit"
+              disabled={submitting || !chatInput.trim()}
+              className="h-8 px-3 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1"
+            >
+              {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+            </button>
+          </form>
+        </>
       )}
     </aside>
   );

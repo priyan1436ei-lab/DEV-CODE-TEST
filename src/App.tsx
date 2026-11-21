@@ -1,35 +1,39 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Activity,
-  Bot,
+  AlertCircle,
+  AlertTriangle,
+  Blocks,
   Bug,
-  ChevronDown,
-  ChevronRight,
-  Cpu,
+  Code2,
   FileCode2,
-  FilePlus2,
-  Folder,
-  FolderPlus,
-  KeyRound,
+  FolderGit2,
+  GitBranch,
+  GitFork,
+  History,
   LayoutDashboard,
   LogOut,
+  Maximize2,
+  Minimize2,
+  Minus,
+  Moon,
   PanelBottom,
   PanelLeft,
   PanelRight,
-  Play,
   RefreshCw,
   Search,
   Settings,
-  Shield,
-  Trash2,
+  ShieldAlert,
+  Sun,
+  X,
 } from 'lucide-react';
 import { AiWorkspacePanel } from './components/AiWorkspacePanel';
-import { BottomSandboxPanel } from './components/BottomSandboxPanel';
+import { BottomWorkbenchPanel } from './components/BottomWorkbenchPanel';
 import { CodeEditorView } from './components/CodeEditorView';
 import { CommandPalette } from './components/CommandPalette';
 import { DashboardView } from './components/DashboardView';
 import { DebuggingCenterView } from './components/DebuggingCenterView';
 import { ExecutionHistoryView } from './components/ExecutionHistoryView';
+import { ExtensionsView } from './components/ExtensionsView';
 import { ImportRepoModal } from './components/ImportRepoModal';
 import { LoginGate } from './components/LoginGate';
 import { RepoBrainView } from './components/RepoBrainView';
@@ -46,8 +50,9 @@ import type {
   AuditLogEntry,
   ChatMessage,
   CodeChange,
+  CodeCitation,
   DebugAnalysis,
-  LlmProviderId,
+  ExtensionHostSnapshot,
   PermissionLevel,
   PermissionPolicyRule,
   Project,
@@ -55,1248 +60,1334 @@ import type {
   ScreenId,
   SecurityFinding,
   TaskPriority,
-  TestRun,
   UsageLedger,
 } from './types/devmind';
 
-interface ToastItem {
-  id: string;
-  message: string;
-  tone: 'info' | 'success' | 'warning' | 'error';
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    if (!item || !item.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    result.push(item);
+  }
+  return result;
 }
 
-export default function App() {
-  // Authentication & BYOK LLM Session
-  const [session, setSession] = useState<PublicUserSession | null>(null);
-  const [presets, setPresets] = useState<ProviderPreset[]>([]);
-  const [checkingAuth, setCheckingAuth] = useState(true);
-  const [sseConnected, setSseConnected] = useState(false);
+type MenuId = 'file' | 'view' | 'extensions' | 'help' | null;
 
-  // Core Workspace State
+export function App() {
+  const [theme, setTheme] = useState<'dark' | 'light'>(() => {
+    try {
+      const saved = window.localStorage.getItem('devmind_theme');
+      return saved === 'light' ? 'light' : 'dark';
+    } catch {
+      return 'dark';
+    }
+  });
+
+  const [session, setSession] = useState<PublicUserSession | null>(null);
+  const [booting, setBooting] = useState(true);
+
   const [projects, setProjects] = useState<Project[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string>('');
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  const [pendingDiff, setPendingDiff] = useState<CodeChange | null>(null);
+  const [cursorPos, setCursorPos] = useState<{ line: number; col: number }>({ line: 1, col: 1 });
+
   const [tasks, setTasks] = useState<AgentTask[]>([]);
-  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [securityFindings, setSecurityFindings] = useState<SecurityFinding[]>([]);
-  const [testRuns, setTestRuns] = useState<TestRun[]>([]);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [debugAnalyses, setDebugAnalyses] = useState<DebugAnalysis[]>([]);
   const [policies, setPolicies] = useState<PermissionPolicyRule[]>([]);
+  const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [usage, setUsage] = useState<UsageLedger | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [extensionHost, setExtensionHost] = useState<ExtensionHostSnapshot | null>(null);
 
-  // Obsidian Studio Modern 4-Panel Resizable Layout
-  const [activeScreen, setActiveScreen] = useState<ScreenId>('explorer');
-  const [showExplorerDrawer, setShowExplorerDrawer] = useState(true);
-  const [showRightPanel, setShowRightPanel] = useState(true);
-  const [showBottomPanel, setShowBottomPanel] = useState(true);
-  const [leftWidth, setLeftWidth] = useState(236);
-  const [rightWidth, setRightWidth] = useState(372);
-  const [bottomHeight, setBottomHeight] = useState(215);
-
-  // Editor Tabs & Inline New File Creator
-  const [openTabs, setOpenTabs] = useState<string[]>([]);
-  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
-  const [highlightLine, setHighlightLine] = useState<number | null>(null);
-  const [activeDiffChange, setActiveDiffChange] = useState<CodeChange | null>(null);
-  const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
-  const [creatingFile, setCreatingFile] = useState(false);
-  const [newFilePath, setNewFilePath] = useState('src/newModule.ts');
-  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
-
-  // Busy & Overlay State
-  const [loadingWorkspace, setLoadingWorkspace] = useState(false);
-  const [runningTests, setRunningTests] = useState(false);
-  const [agentBusy, setAgentBusy] = useState(false);
-  const [chatBusy, setChatBusy] = useState(false);
-  const [debugBusy, setDebugBusy] = useState(false);
-  const [draftTaskPrompt, setDraftTaskPrompt] = useState('');
+  const [screen, setScreen] = useState<ScreenId>('explorer');
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [rightPanelOpen, setRightPanelOpen] = useState(true);
+  const [bottomPanelCollapsed, setBottomPanelCollapsed] = useState(false);
+  const [bottomTab, setBottomTab] = useState<'problems' | 'extensions' | 'audit'>('problems');
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
-  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [openMenu, setOpenMenu] = useState<MenuId>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
+  const [sseConnected, setSseConnected] = useState(false);
+  const [toast, setToast] = useState<{ tone: 'info' | 'error'; text: string } | null>(null);
 
-  const dragModeRef = useRef<'left' | 'right' | 'bottom' | null>(null);
-  const activeProjectIdRef = useRef<string>('');
+  const activeProjectIdRef = useRef(activeProjectId);
+  activeProjectIdRef.current = activeProjectId;
+
+  const showToast = useCallback((text: string, tone: 'info' | 'error' = 'info') => {
+    setToast({ text, tone });
+  }, []);
 
   useEffect(() => {
-    activeProjectIdRef.current = activeProjectId;
-  }, [activeProjectId]);
+    if (!toast) return;
+    const timer = window.setTimeout(() => setToast(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [toast]);
 
-  const pushToast = useCallback((message: string, tone: ToastItem['tone'] = 'info') => {
-    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-    setToasts((prev) => [...prev.slice(-2), { id, message, tone }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 4000);
-  }, []);
-
-  const activeProject = useMemo(
-    () => projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null,
-    [projects, activeProjectId]
-  );
-
-  const activeTask = useMemo(() => {
-    if (!activeProject) return null;
-    const projTasks = tasks.filter((t) => t.projectId === activeProject.id);
-    if (activeTaskId) {
-      const found = projTasks.find((t) => t.id === activeTaskId);
-      if (found) return found;
-    }
-    return projTasks[0] ?? null;
-  }, [tasks, activeTaskId, activeProject]);
-
-  const refreshGlobalMeta = useCallback(async () => {
-    const [polRes, useRes, audRes] = await Promise.all([
-      devmindApi.getPolicies(),
-      devmindApi.getUsage(),
-      devmindApi.getAuditLogs(),
-    ]);
-    setPolicies(Array.isArray(polRes.policies) ? polRes.policies : []);
-    if (Array.isArray(polRes.presets)) setPresets(polRes.presets);
-    setUsage(useRes.usage ?? null);
-    setAuditLogs(Array.isArray(audRes.auditLogs) ? audRes.auditLogs : []);
-  }, []);
-
-  const loadProjectContext = useCallback(async (projectId: string) => {
-    const [secRes, testRes, chatRes, dbgRes, taskRes] = await Promise.all([
-      devmindApi.getSecurityFindings(projectId),
-      devmindApi.getTestRuns(projectId),
-      devmindApi.getChatHistory(projectId),
-      devmindApi.getDebugAnalyses(projectId),
-      devmindApi.listTasks(projectId),
-    ]);
-    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-    setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
-    setChatMessages(Array.isArray(chatRes.messages) ? chatRes.messages : []);
-    setDebugAnalyses(Array.isArray(dbgRes.analyses) ? dbgRes.analyses : []);
-    const safeTasks = Array.isArray(taskRes.tasks) ? taskRes.tasks : [];
-    setTasks(safeTasks);
-    setActiveTaskId((prev) => (prev && safeTasks.some((t) => t.id === prev) ? prev : safeTasks[0]?.id ?? null));
-  }, []);
-
-  const bootstrapWorkspace = useCallback(async () => {
-    setLoadingWorkspace(true);
+  // Apply Fluent Dark/Light class on root element
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
     try {
-      const [{ projects: list }] = await Promise.all([
-        devmindApi.listProjects(),
-        refreshGlobalMeta(),
-      ]);
-      const safeList = Array.isArray(list) ? list : [];
-      setProjects(safeList);
-      if (safeList.length > 0) {
-        const first = safeList[0];
-        setActiveProjectId(first.id);
-        const initialFile =
-          first.files.find((f) => f.path.includes('tokenService'))?.path ?? first.files[0]?.path ?? null;
-        if (initialFile) {
-          setOpenTabs([initialFile]);
-          setActiveFilePath(initialFile);
-        }
-        await loadProjectContext(first.id);
-      }
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Failed to load workspace', 'error');
-    } finally {
-      setLoadingWorkspace(false);
+      window.localStorage.setItem('devmind_theme', theme);
+    } catch {
+      // Ignore storage failures
     }
-  }, [loadProjectContext, pushToast, refreshGlobalMeta]);
+  }, [theme]);
 
-  // Step 1: Load Provider Presets & Restore Existing Session if Valid
+  // Track Electron window maximize state
   useEffect(() => {
-    (async () => {
-      try {
-        const { presets: pList } = await devmindApi.getPresets();
-        setPresets(Array.isArray(pList) ? pList : []);
-        const token = getStoredSessionToken();
-        if (token) {
-          try {
-            const { session: restored } = await devmindApi.getSession();
-            setSession(restored);
-            await bootstrapWorkspace();
-          } catch {
-            setStoredSessionToken(null);
-          }
-        }
-      } catch (err) {
-        pushToast(err instanceof Error ? err.message : 'Server unreachable', 'error');
-      } finally {
-        setCheckingAuth(false);
-      }
-    })();
-  }, [bootstrapWorkspace, pushToast]);
+    if (!window.devmindDesktop) return;
+    window.devmindDesktop.isMaximized().then(setIsMaximized).catch(() => {});
+    const unsubscribe = window.devmindDesktop.onMaximizedChanged((max) => {
+      setIsMaximized(max);
+    });
+    return () => unsubscribe();
+  }, []);
 
-  // Step 2: Real-Time SSE Synchronization Subscription (with Auto-Reconnect)
+  // Global keyboard shortcuts (Ctrl+K Command Palette, Ctrl+B Explorer, Ctrl+J Bottom Panel)
   useEffect(() => {
-    if (!session) return;
-    let closed = false;
-    let source: EventSource | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-
-    const connect = () => {
-      if (closed) return;
-      source = new EventSource('/api/v1/events');
-
-      source.onopen = () => setSseConnected(true);
-
-      source.onmessage = async (ev) => {
-        try {
-          const evt = JSON.parse(ev.data) as { type: string; projectId?: string };
-          if (evt.type === 'connected') {
-            setSseConnected(true);
-            return;
-          }
-          const currentId = activeProjectIdRef.current;
-
-          if (evt.type === 'project_updated') {
-            const { projects: latest } = await devmindApi.listProjects();
-            if (Array.isArray(latest)) {
-              setProjects(latest);
-              const targetId = currentId && latest.some((p) => p.id === currentId) ? currentId : latest[0]?.id;
-              if (targetId) {
-                setActiveProjectId(targetId);
-                const secRes = await devmindApi.getSecurityFindings(targetId);
-                setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-              }
-            }
-          }
-
-          if (currentId && (!evt.projectId || evt.projectId === currentId)) {
-            if (evt.type === 'tests_updated') {
-              const res = await devmindApi.getTestRuns(currentId);
-              setTestRuns(Array.isArray(res.testRuns) ? res.testRuns : []);
-            } else if (evt.type === 'task_updated') {
-              const res = await devmindApi.listTasks(currentId);
-              setTasks(Array.isArray(res.tasks) ? res.tasks : []);
-            } else if (evt.type === 'chat_updated') {
-              const res = await devmindApi.getChatHistory(currentId);
-              setChatMessages(Array.isArray(res.messages) ? res.messages : []);
-            } else if (evt.type === 'debug_updated') {
-              const res = await devmindApi.getDebugAnalyses(currentId);
-              setDebugAnalyses(Array.isArray(res.analyses) ? res.analyses : []);
-            }
-          }
-
-          await refreshGlobalMeta();
-        } catch {
-          // Ignore malformed keepalive frames
-        }
-      };
-
-      source.onerror = () => {
-        setSseConnected(false);
-        source?.close();
-        if (!closed) {
-          reconnectTimer = setTimeout(connect, 2500);
-        }
-      };
-    };
-
-    connect();
-
-    return () => {
-      closed = true;
-      setSseConnected(false);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      source?.close();
-    };
-  }, [session, refreshGlobalMeta]);
-
-  // Global Keyboard Shortcuts
-  useEffect(() => {
-    if (!session) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && e.key.toLowerCase() === 'k') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setCommandPaletteOpen((v) => !v);
-      } else if (mod && e.key.toLowerCase() === 'j') {
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
         e.preventDefault();
-        setShowRightPanel((v) => !v);
-      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'f') {
+        setExplorerOpen((v) => !v);
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
         e.preventDefault();
-        setActiveScreen('brain');
+        setBottomPanelCollapsed((v) => !v);
       } else if (e.key === 'Escape') {
-        setCommandPaletteOpen(false);
-        setImportModalOpen(false);
-        setCreatingFile(false);
+        setOpenMenu(null);
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [session]);
-
-  // Panel Drag Resizing
-  useEffect(() => {
-    const onMouseMove = (e: MouseEvent) => {
-      const mode = dragModeRef.current;
-      if (!mode) return;
-      if (mode === 'left') {
-        setLeftWidth(Math.min(360, Math.max(185, e.clientX - 52)));
-      } else if (mode === 'right') {
-        setRightWidth(Math.min(540, Math.max(300, window.innerWidth - e.clientX)));
-      } else if (mode === 'bottom') {
-        setBottomHeight(Math.min(420, Math.max(130, window.innerHeight - e.clientY)));
-      }
-    };
-    const onMouseUp = () => {
-      dragModeRef.current = null;
-      document.body.style.cursor = '';
-    };
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-    };
   }, []);
 
-  const beginDrag = (mode: 'left' | 'right' | 'bottom') => {
-    dragModeRef.current = mode;
-    document.body.style.cursor = mode === 'bottom' ? 'row-resize' : 'col-resize';
+  // Close desktop menus when clicking outside
+  useEffect(() => {
+    if (!openMenu) return;
+    const close = () => setOpenMenu(null);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [openMenu]);
+
+  // Check existing session on startup
+  useEffect(() => {
+    const token = getStoredSessionToken();
+    if (!token) {
+      setBooting(false);
+      return;
+    }
+    devmindApi
+      .getSession()
+      .then((res) => setSession(res.session))
+      .catch(() => {
+        setStoredSessionToken(null);
+        setSession(null);
+      })
+      .finally(() => setBooting(false));
+  }, []);
+
+  const refreshProjectData = useCallback(async (projectId: string) => {
+    if (!projectId) return;
+    const [secRes, chatRes, debugRes, taskRes, extRes] = await Promise.all([
+      devmindApi.getSecurityFindings(projectId),
+      devmindApi.getChatHistory(projectId),
+      devmindApi.getDebugAnalyses(projectId),
+      devmindApi.listTasks(projectId),
+      devmindApi.getExtensionsHost(projectId),
+    ]);
+    setSecurityFindings(dedupeById(secRes.findings));
+    setChatMessages(dedupeById(chatRes.messages));
+    setDebugAnalyses(dedupeById(debugRes.analyses));
+    setTasks(dedupeById(taskRes.tasks));
+    setExtensionHost(extRes.host);
+  }, []);
+
+  const refreshGlobalData = useCallback(async () => {
+    const [projRes, polRes, usageRes, auditRes] = await Promise.all([
+      devmindApi.listProjects(),
+      devmindApi.getPolicies(),
+      devmindApi.getUsage(),
+      devmindApi.getAuditLogs(),
+    ]);
+    const uniqueProjects = dedupeById(projRes.projects);
+    setProjects(uniqueProjects);
+    setPolicies(polRes.policies);
+    setPresets(polRes.presets);
+    setUsage(usageRes.usage);
+    setAuditLogs(dedupeById(auditRes.auditLogs));
+
+    const currentId = activeProjectIdRef.current;
+    const targetProject =
+      uniqueProjects.find((p) => p.id === currentId) || uniqueProjects[0] || null;
+    if (targetProject) {
+      if (targetProject.id !== currentId) {
+        setActiveProjectId(targetProject.id);
+        setActiveFilePath(targetProject.files[0]?.path ?? null);
+      }
+      await refreshProjectData(targetProject.id);
+    }
+  }, [refreshProjectData]);
+
+  useEffect(() => {
+    if (!session) return;
+    refreshGlobalData().catch((err) => {
+      showToast(err instanceof Error ? err.message : 'Failed to load workspace data.', 'error');
+    });
+  }, [session, refreshGlobalData, showToast]);
+
+  // Real-Time Server-Sent Events Sync
+  useEffect(() => {
+    const token = getStoredSessionToken();
+    if (!session || !token) return;
+
+    const es = new EventSource(`/api/v1/events?token=${encodeURIComponent(token)}`);
+    es.onopen = () => setSseConnected(true);
+    es.onerror = () => setSseConnected(false);
+
+    es.onmessage = async (event) => {
+      try {
+        const msg = JSON.parse(event.data) as { type: string; payload?: Record<string, unknown> };
+        const currentId = activeProjectIdRef.current;
+
+        if (msg.type === 'project_updated' || msg.type === 'project_deleted') {
+          const projRes = await devmindApi.listProjects();
+          setProjects(dedupeById(projRes.projects));
+          if (currentId) {
+            const [secRes, extRes] = await Promise.all([
+              devmindApi.getSecurityFindings(currentId),
+              devmindApi.getExtensionsHost(currentId),
+            ]);
+            setSecurityFindings(dedupeById(secRes.findings));
+            setExtensionHost(extRes.host);
+          }
+        } else if (msg.type === 'task_updated' && currentId) {
+          const [taskRes, usageRes, auditRes] = await Promise.all([
+            devmindApi.listTasks(currentId),
+            devmindApi.getUsage(),
+            devmindApi.getAuditLogs(),
+          ]);
+          setTasks(dedupeById(taskRes.tasks));
+          setUsage(usageRes.usage);
+          setAuditLogs(dedupeById(auditRes.auditLogs));
+        } else if (msg.type === 'extensions_updated') {
+          const [extRes, auditRes] = await Promise.all([
+            devmindApi.getExtensionsHost(currentId || undefined),
+            devmindApi.getAuditLogs(),
+          ]);
+          setExtensionHost(extRes.host);
+          setAuditLogs(dedupeById(auditRes.auditLogs));
+        } else if (msg.type === 'chat_updated' && currentId) {
+          const chatRes = await devmindApi.getChatHistory(currentId);
+          setChatMessages(dedupeById(chatRes.messages));
+        } else if (msg.type === 'debug_updated' && currentId) {
+          const debugRes = await devmindApi.getDebugAnalyses(currentId);
+          setDebugAnalyses(dedupeById(debugRes.analyses));
+        } else if (msg.type === 'policy_updated') {
+          const polRes = await devmindApi.getPolicies();
+          setPolicies(polRes.policies);
+        } else if (msg.type === 'usage_updated') {
+          const usageRes = await devmindApi.getUsage();
+          setUsage(usageRes.usage);
+        }
+      } catch {
+        // Ignore malformed heartbeat events
+      }
+    };
+
+    return () => {
+      es.close();
+      setSseConnected(false);
+    };
+  }, [session]);
+
+  const activeProject = useMemo(
+    () => projects.find((p) => p.id === activeProjectId) || projects[0] || null,
+    [projects, activeProjectId]
+  );
+
+  const activeFile = useMemo(
+    () => activeProject?.files.find((f) => f.path === activeFilePath) || activeProject?.files[0] || null,
+    [activeProject, activeFilePath]
+  );
+
+  // Keep activeFilePath synced if current file disappears
+  useEffect(() => {
+    if (!activeProject) return;
+    if (!activeFilePath || !activeProject.files.some((f) => f.path === activeFilePath)) {
+      setActiveFilePath(activeProject.files[0]?.path ?? null);
+    }
+  }, [activeProject, activeFilePath]);
+
+  const handleSelectProject = async (projectId: string) => {
+    setActiveProjectId(projectId);
+    setPendingDiff(null);
+    setHighlightLine(null);
+    const found = projects.find((p) => p.id === projectId);
+    setActiveFilePath(found?.files[0]?.path ?? null);
+    await refreshProjectData(projectId);
   };
 
-  const handleAuthenticated = async (token: string, nextSession: PublicUserSession) => {
-    setStoredSessionToken(token);
-    setSession(nextSession);
-    await bootstrapWorkspace();
-    pushToast(
-      nextSession.llm.configured
-        ? `Connected to ${nextSession.llm.provider} (${nextSession.llm.model})`
-        : 'Entered Local Sandbox Mode — configure your LLM anytime in Settings.',
-      'success'
+  const handleOpenFileLine = (filePath: string, line = 1) => {
+    setActiveFilePath(filePath);
+    setHighlightLine(line);
+    setScreen('explorer');
+  };
+
+  const handleOpenCitation = (citation: CodeCitation) => {
+    handleOpenFileLine(citation.filePath, citation.startLine);
+  };
+
+  const handleOpenDiff = (change: CodeChange) => {
+    setActiveFilePath(change.filePath);
+    setPendingDiff(change);
+    setScreen('explorer');
+  };
+
+  const handleSaveFile = useCallback(
+    async (filePath: string, content: string) => {
+      if (!activeProject) return;
+      const res = await devmindApi.saveFile(activeProject.id, filePath, content);
+      setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+      const [secRes, extRes] = await Promise.all([
+        devmindApi.getSecurityFindings(activeProject.id),
+        devmindApi.getExtensionsHost(activeProject.id),
+      ]);
+      setSecurityFindings(dedupeById(secRes.findings));
+      setExtensionHost(extRes.host);
+    },
+    [activeProject]
+  );
+
+  const handleCreateFile = async (filePath: string, content: string) => {
+    if (!activeProject) return;
+    await handleSaveFile(filePath, content);
+    setActiveFilePath(filePath);
+    showToast(`Created ${filePath}`);
+  };
+
+  const handleDeleteFile = async (filePath: string) => {
+    if (!activeProject) return;
+    const res = await devmindApi.deleteFile(activeProject.id, filePath);
+    setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    setActiveFilePath(res.project.files[0]?.path ?? null);
+    const extRes = await devmindApi.getExtensionsHost(activeProject.id);
+    setExtensionHost(extRes.host);
+    showToast(`Deleted ${filePath}`);
+  };
+
+  const handleReindex = async () => {
+    if (!activeProject) return;
+    const res = await devmindApi.reindexProject(activeProject.id);
+    setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    const extRes = await devmindApi.getExtensionsHost(activeProject.id);
+    setExtensionHost(extRes.host);
+    showToast(`Re-indexed ${res.project.architecture.totalSymbols} symbols.`);
+  };
+
+  const handleCreateProject = async (body: {
+    name: string;
+    description: string;
+    localPath: string;
+    files: Array<{ path: string; content: string }>;
+  }) => {
+    const res = await devmindApi.createProject(body);
+    setProjects((prev) => dedupeById([res.project, ...prev]));
+    setActiveProjectId(res.project.id);
+    setActiveFilePath(res.project.files[0]?.path ?? null);
+    await refreshProjectData(res.project.id);
+    setScreen('explorer');
+    showToast(`Imported repository "${res.project.name}".`);
+  };
+
+  // Extension Host Handlers
+  const handleInstallExtension = async (extensionId: string) => {
+    const res = await devmindApi.installExtension(extensionId, activeProject?.id);
+    setExtensionHost(res.host);
+    showToast(`Installed ${res.installedIds.join(', ')}`);
+  };
+
+  const handleUninstallExtension = async (extensionId: string, cascade = false) => {
+    const res = await devmindApi.uninstallExtension(extensionId, cascade, activeProject?.id);
+    setExtensionHost(res.host);
+    showToast(`Uninstalled ${res.uninstalledIds.join(', ')}`);
+  };
+
+  const handleToggleExtension = async (extensionId: string, enabled: boolean) => {
+    const res = await devmindApi.toggleExtension(extensionId, enabled, activeProject?.id);
+    setExtensionHost(res.host);
+    showToast(`${enabled ? 'Enabled' : 'Disabled'} ${extensionId}`);
+  };
+
+  const handleActivateExtension = async (extensionId: string) => {
+    const res = await devmindApi.activateExtension(extensionId, activeProject?.id);
+    setExtensionHost(res.host);
+    showToast(`Activated ${extensionId}`);
+  };
+
+  const handleExecuteExtensionCommand = async (commandId: string, filePath?: string) => {
+    if (!activeProject) return;
+    const res = await devmindApi.executeExtensionCommand(
+      commandId,
+      activeProject.id,
+      filePath || activeFile?.path
     );
+    setExtensionHost(res.host);
+    if (res.project) {
+      setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project!.id ? res.project! : p))));
+      const secRes = await devmindApi.getSecurityFindings(activeProject.id);
+      setSecurityFindings(dedupeById(secRes.findings));
+    }
+    showToast(res.message);
+  };
+
+  // Tasks, Approvals, Debugging, Chat, Policy
+  const handleCreateTask = async (
+    title: string,
+    description: string,
+    executionMode: 'approval' | 'direct',
+    priority: TaskPriority
+  ) => {
+    if (!activeProject) return;
+    const res = await devmindApi.createAgentTask({
+      projectId: activeProject.id,
+      title,
+      description,
+      executionMode,
+      priority,
+    });
+    setTasks((prev) => dedupeById([res.task, ...prev]));
+    setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    const [usageRes, secRes, extRes] = await Promise.all([
+      devmindApi.getUsage(),
+      devmindApi.getSecurityFindings(activeProject.id),
+      devmindApi.getExtensionsHost(activeProject.id),
+    ]);
+    setUsage(usageRes.usage);
+    setSecurityFindings(dedupeById(secRes.findings));
+    setExtensionHost(extRes.host);
+  };
+
+  const handleDecideApproval = async (approvalId: string, decision: 'approve' | 'reject') => {
+    const res = await devmindApi.decideApproval(approvalId, decision);
+    setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+    setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    setSecurityFindings(dedupeById(res.securityFindings));
+    if (activeProject) {
+      const extRes = await devmindApi.getExtensionsHost(activeProject.id);
+      setExtensionHost(extRes.host);
+    }
+    showToast(decision === 'approve' ? 'Patches applied to workspace.' : 'Patch proposal rejected.');
+  };
+
+  const handleRollbackTask = async (taskId: string) => {
+    const res = await devmindApi.rollbackTask(taskId);
+    setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+    setProjects((prev) => dedupeById(prev.map((p) => (p.id === res.project.id ? res.project : p))));
+    setSecurityFindings(dedupeById(res.securityFindings));
+    if (activeProject) {
+      const extRes = await devmindApi.getExtensionsHost(activeProject.id);
+      setExtensionHost(extRes.host);
+    }
+    showToast('Restored workspace files from rollback snapshot.');
+  };
+
+  const handleCancelTask = async (taskId: string) => {
+    const res = await devmindApi.cancelTask(taskId);
+    setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+  };
+
+  const handleUpdateTaskPriority = async (taskId: string, priority: TaskPriority) => {
+    const res = await devmindApi.updateTaskPriority(taskId, priority);
+    setTasks((prev) => dedupeById(prev.map((t) => (t.id === res.task.id ? res.task : t))));
+  };
+
+  const handleSendChat = async (message: string) => {
+    if (!activeProject) return;
+    const res = await devmindApi.sendChatMessage(activeProject.id, message);
+    setChatMessages(dedupeById(res.messages));
+    const usageRes = await devmindApi.getUsage();
+    setUsage(usageRes.usage);
+  };
+
+  const handleAnalyzeError = async (errorLog: string) => {
+    if (!activeProject) return;
+    const res = await devmindApi.runDebugAnalysis(activeProject.id, errorLog);
+    setDebugAnalyses((prev) => dedupeById([res.analysis, ...prev]));
+  };
+
+  const handleRemediateSecurity = async (finding: SecurityFinding) => {
+    if (!activeProject) return;
+    await handleCreateTask(
+      `Remediate ${finding.cwe} in ${finding.filePath}`,
+      `Fix security finding "${finding.title}" (${finding.cwe}) at ${finding.filePath}:${finding.line}. ${finding.remediation}`,
+      'approval',
+      finding.severity === 'critical' || finding.severity === 'high' ? 'high' : 'medium'
+    );
+    setRightPanelOpen(true);
+    showToast(`Created remediation task for ${finding.cwe}.`);
   };
 
   const handleLogout = async () => {
     try {
       await devmindApi.logout();
     } catch {
-      // ignore
+      // Ignore logout errors
     }
     setStoredSessionToken(null);
     setSession(null);
   };
 
-  const handleUpdateLlm = async (input: {
-    provider: LlmProviderId;
-    baseUrl: string;
-    model: string;
-    apiKey: string;
-  }) => {
-    const res = await devmindApi.updateLlmConfig(input);
-    setSession(res.session);
-    pushToast(`Switched active LLM to ${res.session.llm.provider}/${res.session.llm.model}`, 'success');
-  };
-
-  const handleSelectProject = async (projectId: string) => {
-    setActiveProjectId(projectId);
-    setActiveDiffChange(null);
-    setConfirmDeleteProject(false);
-    const proj = projects.find((p) => p.id === projectId);
-    if (proj && proj.files[0]) {
-      setOpenTabs([proj.files[0].path]);
-      setActiveFilePath(proj.files[0].path);
+  const handleToggleMaximize = async () => {
+    if (window.devmindDesktop) {
+      const max = await window.devmindDesktop.toggleMaximize();
+      setIsMaximized(max);
+      return;
     }
-    await loadProjectContext(projectId);
-    pushToast(`Switched workspace to ${proj?.name ?? projectId}`, 'info');
-  };
-
-  const handleDeleteCurrentProject = async () => {
-    if (!activeProject || projects.length <= 1) return;
-    setConfirmDeleteProject(false);
-    try {
-      const res = await devmindApi.deleteProject(activeProject.id);
-      const nextList = Array.isArray(res.projects) ? res.projects : [];
-      setProjects(nextList);
-      if (nextList[0]) {
-        setActiveProjectId(nextList[0].id);
-        setOpenTabs(nextList[0].files[0] ? [nextList[0].files[0].path] : []);
-        setActiveFilePath(nextList[0].files[0]?.path ?? null);
-        await loadProjectContext(nextList[0].id);
-      }
-      pushToast(`Deleted repository ${activeProject.name}`, 'info');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Failed to delete project', 'error');
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen?.().catch(() => {});
+      setIsMaximized(true);
+    } else {
+      document.exitFullscreen?.().catch(() => {});
+      setIsMaximized(false);
     }
   };
 
-  const handleOpenFileAtLine = (filePath: string, line?: number) => {
-    setActiveDiffChange(null);
-    setActiveScreen('explorer');
-    setOpenTabs((prev) => (prev.includes(filePath) ? prev : [...prev, filePath]));
-    setActiveFilePath(filePath);
-    if (line) {
-      setHighlightLine(null);
-      setTimeout(() => setHighlightLine(line), 25);
-    }
-  };
-
-  const handleCloseTab = (filePath: string) => {
-    setOpenTabs((prev) => {
-      const next = prev.filter((p) => p !== filePath);
-      if (activeFilePath === filePath) {
-        setActiveFilePath(next[next.length - 1] ?? null);
-      }
-      return next;
-    });
-  };
-
-  const handleInspectDiff = (change: CodeChange) => {
-    setActiveDiffChange(change);
-    setActiveScreen('explorer');
-  };
-
-  const handleSaveFile = async (filePath: string, content: string, silent = false) => {
-    if (!activeProject) return;
-    const res = await devmindApi.saveFile(activeProject.id, filePath, content);
-    setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-    const secRes = await devmindApi.getSecurityFindings(activeProject.id);
-    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-    await refreshGlobalMeta();
-    if (!silent) {
-      pushToast(`Saved & synced ${filePath}`, 'success');
-    }
-  };
-
-  const handleCreateNewFile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeProject || !newFilePath.trim()) return;
-    const clean = newFilePath.trim().replace(/^\/+/, '');
-    try {
-      const res = await devmindApi.saveFile(
-        activeProject.id,
-        clean,
-        `// ${clean}\nexport function hello(): string {\n  return 'ready';\n}\n`
-      );
-      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      setCreatingFile(false);
-      setNewFilePath('src/newModule.ts');
-      handleOpenFileAtLine(clean, 1);
-      pushToast(`Created ${clean}`, 'success');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Failed to create file', 'error');
-    }
-  };
-
-  const handleDeleteFile = async (filePath: string) => {
-    if (!activeProject) return;
-    try {
-      const res = await devmindApi.deleteFile(activeProject.id, filePath);
-      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      handleCloseTab(filePath);
-      const secRes = await devmindApi.getSecurityFindings(activeProject.id);
-      setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-      pushToast(`Deleted ${filePath}`, 'info');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Delete file failed', 'error');
-    }
-  };
-
-  const handleReindex = async () => {
-    if (!activeProject) return;
-    const res = await devmindApi.reindexProject(activeProject.id);
-    setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-    const secRes = await devmindApi.getSecurityFindings(activeProject.id);
-    setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-    await refreshGlobalMeta();
-    pushToast(
-      `Indexed ${res.project.files.length} files (${res.project.symbols.length} symbols) in ${res.project.indexingDurationMs}ms`,
-      'success'
-    );
-  };
-
-  const handleRunSandboxTests = async (): Promise<TestRun | null> => {
-    if (!activeProject) return null;
-    setRunningTests(true);
-    setShowBottomPanel(true);
-    try {
-      const res = await devmindApi.runSandboxTests(activeProject.id);
-      setTestRuns((prev) => [res.testRun, ...prev.filter((r) => r.id !== res.testRun.id)]);
-      await refreshGlobalMeta();
-      const covSuffix = res.testRun.coverage
-        ? ` · ${res.testRun.coverage.linePercent.toFixed(1)}% line coverage`
-        : '';
-      pushToast(
-        res.testRun.status === 'passed'
-          ? `Sandbox verified: ${res.testRun.passedCount}/${res.testRun.totalCount} passed${covSuffix}`
-          : `Sandbox run: ${res.testRun.passedCount}/${res.testRun.totalCount} passed${covSuffix}`,
-        res.testRun.status === 'passed' ? 'success' : 'warning'
-      );
-      return res.testRun;
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Sandbox execution failed', 'error');
-      return null;
-    } finally {
-      setRunningTests(false);
-    }
-  };
-
-  const handleStartTask = async (
-    title: string,
-    description: string,
-    executionMode: 'approval' | 'strict_sandbox',
-    priority: TaskPriority = 'medium'
-  ) => {
-    if (!activeProject) return;
-    setAgentBusy(true);
-    setShowRightPanel(true);
-    try {
-      const res = await devmindApi.createAgentTask({
-        projectId: activeProject.id,
-        title,
-        description,
-        executionMode,
-        priority,
-      });
-      setTasks((prev) => [res.task, ...prev.filter((t) => t.id !== res.task.id)]);
-      setActiveTaskId(res.task.id);
-      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      const [testRes, secRes] = await Promise.all([
-        devmindApi.getTestRuns(activeProject.id),
-        devmindApi.getSecurityFindings(activeProject.id),
-      ]);
-      setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
-      setSecurityFindings(Array.isArray(secRes.findings) ? secRes.findings : []);
-      await refreshGlobalMeta();
-
-      if (res.task.status === 'awaiting_approval') {
-        pushToast('Approval checkpoint ready: inspect proposed diffs before applying.', 'warning');
-        if (res.task.changes[0]) {
-          setActiveDiffChange(res.task.changes[0]);
-          setActiveScreen('explorer');
-        }
-      } else if (res.task.status === 'completed') {
-        pushToast('Autonomous task verified and completed.', 'success');
-      } else if (res.task.errorMessage) {
-        pushToast(res.task.errorMessage, 'error');
-      }
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Autonomous agent failed', 'error');
-    } finally {
-      setAgentBusy(false);
-    }
-  };
-
-  const handleDecideApproval = async (approvalId: string, decision: 'approve' | 'reject') => {
-    if (!activeProject) return;
-    try {
-      const res = await devmindApi.decideApproval(approvalId, decision);
-      setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
-      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      setSecurityFindings(Array.isArray(res.securityFindings) ? res.securityFindings : []);
-      const testRes = await devmindApi.getTestRuns(activeProject.id);
-      setTestRuns(Array.isArray(testRes.testRuns) ? testRes.testRuns : []);
-      await refreshGlobalMeta();
-
-      if (decision === 'reject') {
-        pushToast('Proposed changes rejected. Workspace untouched.', 'info');
-      } else if (res.task.status === 'completed') {
-        setShowBottomPanel(true);
-        pushToast('Patches applied & verified: all sandbox tests passed.', 'success');
-      } else {
-        setShowBottomPanel(true);
-        pushToast(res.task.errorMessage || 'Sandbox verification reported failing tests.', 'warning');
-      }
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Approval processing failed', 'error');
-    }
-  };
-
-  const handleRollbackTask = async (taskId: string) => {
-    if (!activeProject) return;
-    try {
-      const res = await devmindApi.rollbackTask(taskId);
-      setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
-      setProjects((prev) => prev.map((p) => (p.id === res.project.id ? res.project : p)));
-      setSecurityFindings(Array.isArray(res.securityFindings) ? res.securityFindings : []);
-      await refreshGlobalMeta();
-      pushToast('Workspace restored from rollback snapshot.', 'success');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Rollback failed', 'error');
-    }
-  };
-
-  const handleSendChat = async (message: string) => {
-    if (!activeProject) return;
-    setChatBusy(true);
-    try {
-      const res = await devmindApi.sendChatMessage(activeProject.id, message);
-      setChatMessages(Array.isArray(res.messages) ? res.messages : []);
-      await refreshGlobalMeta();
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Repo chat failed', 'error');
-    } finally {
-      setChatBusy(false);
-    }
-  };
-
-  const handleRunDebugAnalysis = async (errorLog: string) => {
-    if (!activeProject) return;
-    setDebugBusy(true);
-    try {
-      const res = await devmindApi.runDebugAnalysis(activeProject.id, errorLog);
-      setDebugAnalyses((prev) => [res.analysis, ...prev]);
-      await refreshGlobalMeta();
-      pushToast('Root-cause diagnosis completed.', 'success');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Debug analysis failed', 'error');
-    } finally {
-      setDebugBusy(false);
-    }
-  };
-
-  const handleUpdateTaskPriority = async (taskId: string, priority: TaskPriority) => {
-    try {
-      const res = await devmindApi.updateTaskPriority(taskId, priority);
-      setTasks((prev) => prev.map((t) => (t.id === res.task.id ? res.task : t)));
-      await refreshGlobalMeta();
-      pushToast(`Task priority updated to ${priority.toUpperCase()}`, 'info');
-    } catch (err) {
-      pushToast(err instanceof Error ? err.message : 'Failed to update task priority', 'error');
-    }
-  };
-
-  const handleDispatchPromptToAgent = (prompt: string) => {
-    setDraftTaskPrompt(prompt);
-    setShowRightPanel(true);
-    void handleStartTask(prompt.slice(0, 62), prompt, 'approval', 'high');
-  };
-
-  const handleLaunchMilestoneDemo = () => {
-    if (!activeProject) return;
-    const prompt =
-      activeProject.id === 'proj-sentinel-auth'
-        ? 'Analyze the entire authentication project, identify all security vulnerabilities and failing auth bugs (alg: none, timing comparison, exp=0, unsalted SHA-1, case-insensitive bearer header, token revocation, SQL interpolation, token logging), fix them, and verify all tests pass in the sandbox.'
-        : 'Analyze tokenLedger.ts, fix the micro-dollar rounding precision bug and implement the 80% warning and 100% blocking budget guards so all unit tests pass in the sandbox.';
-    handleDispatchPromptToAgent(prompt);
-  };
-
-  const handleCreateProject = async (input: {
-    name: string;
-    description: string;
-    files: Array<{ path: string; content: string }>;
-  }) => {
-    const res = await devmindApi.createProject(input);
-    setProjects((prev) => [res.project, ...prev]);
-    setActiveProjectId(res.project.id);
-    const firstPath = res.project.files[0]?.path ?? null;
-    setOpenTabs(firstPath ? [firstPath] : []);
-    setActiveFilePath(firstPath);
-    await loadProjectContext(res.project.id);
-    await refreshGlobalMeta();
-    pushToast(`Created & indexed project ${res.project.name}`, 'success');
-  };
-
-  const handleUpdatePolicy = async (actionType: string, level: PermissionLevel) => {
-    const res = await devmindApi.updatePolicy(actionType, level);
-    setPolicies(Array.isArray(res.policies) ? res.policies : []);
-    await refreshGlobalMeta();
-    pushToast(`Updated policy for ${actionType}`, 'info');
-  };
-
-  const handleUpdateBudget = async (monthlyBudgetUsd: number, monthlyTokenLimit: number) => {
-    const res = await devmindApi.updateBudget(monthlyBudgetUsd, monthlyTokenLimit);
-    setUsage(res.usage);
-    pushToast('Updated workspace spending guardrails.', 'success');
-  };
-
-  const groupedFiles = useMemo(() => {
-    if (!activeProject || !Array.isArray(activeProject.files)) return [];
-    const dirs = new Map<string, typeof activeProject.files>();
-    for (const file of activeProject.files) {
-      const idx = file.path.lastIndexOf('/');
-      const dir = idx >= 0 ? file.path.slice(0, idx) : '(root)';
-      const list = dirs.get(dir) ?? [];
-      list.push(file);
-      dirs.set(dir, list);
-    }
-    return Array.from(dirs.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [activeProject]);
-
-  if (checkingAuth) {
+  if (booting) {
     return (
-      <div className="h-screen w-screen bg-[#090B10] flex flex-col items-center justify-center gap-3 text-[#A3AABF]">
-        <div className="text-[16px] font-semibold text-[#E6E9F2]">DevMind AI</div>
-        <div className="w-48 h-1.5 rounded-full skeleton-shimmer" />
+      <div className="h-screen w-screen bg-[var(--surface-chrome)] flex items-center justify-center text-xs text-[var(--ink-secondary)]">
+        Starting DevMind Studio...
       </div>
     );
   }
 
   if (!session) {
-    return <LoginGate presets={presets} onAuthenticated={handleAuthenticated} />;
-  }
-
-  if (loadingWorkspace || !activeProject) {
     return (
-      <div className="h-screen w-screen bg-[#090B10] flex flex-col items-center justify-center gap-3 text-[#A3AABF]">
-        <div className="text-[15px] font-semibold text-[#E6E9F2]">Loading Obsidian Studio Workspace...</div>
-        <div className="w-48 h-1.5 rounded-full skeleton-shimmer" />
-      </div>
+      <LoginGate
+        onAuthenticated={(token, nextSession) => {
+          setStoredSessionToken(token);
+          setSession(nextSession);
+        }}
+      />
     );
   }
 
-  const navItems: Array<{ id: ScreenId; label: string; icon: React.ReactNode; badge?: number }> = [
-    { id: 'explorer', label: 'Code Studio', icon: <FileCode2 className="w-4 h-4" /> },
-    { id: 'dashboard', label: 'Overview Dashboard', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'brain', label: 'Repository Brain', icon: <Cpu className="w-4 h-4" /> },
-    { id: 'debugging', label: 'Debugging Center', icon: <Bug className="w-4 h-4" /> },
+  const openSecurityCount = securityFindings.filter((f) => f.status === 'open').length;
+  const activeExtensionsCount =
+    extensionHost?.extensions.filter((e) => e.state === 'active').length ?? 0;
+  const errorProblemsCount =
+    securityFindings.filter(
+      (f) => f.status === 'open' && (f.severity === 'critical' || f.severity === 'high')
+    ).length +
+    (extensionHost?.diagnostics.filter((d) => d.severity === 'error').length ?? 0);
+  const warningProblemsCount =
+    securityFindings.filter(
+      (f) => f.status === 'open' && f.severity !== 'critical' && f.severity !== 'high'
+    ).length +
+    (extensionHost?.diagnostics.filter((d) => d.severity === 'warning').length ?? 0);
+
+  const navItems: Array<{
+    id: ScreenId;
+    label: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: number;
+  }> = [
+    { id: 'explorer', label: 'Code Editor', icon: Code2 },
+    { id: 'dashboard', label: 'Workspace Overview', icon: LayoutDashboard },
+    { id: 'brain', label: 'Architecture & Symbols', icon: GitFork },
+    {
+      id: 'extensions',
+      label: 'Extensions Marketplace',
+      icon: Blocks,
+      badge: activeExtensionsCount || undefined,
+    },
+    { id: 'debugging', label: 'Diagnostics & Debug', icon: Bug },
     {
       id: 'security',
       label: 'Security Center',
-      icon: <Shield className="w-4 h-4" />,
-      badge: securityFindings.length > 0 ? securityFindings.length : undefined,
+      icon: ShieldAlert,
+      badge: openSecurityCount || undefined,
     },
-    {
-      id: 'history',
-      label: 'Execution History',
-      icon: <Activity className="w-4 h-4" />,
-      badge: tasks.length > 0 ? tasks.length : undefined,
-    },
-    { id: 'settings', label: 'BYOK LLM & Governance', icon: <Settings className="w-4 h-4" /> },
+    { id: 'history', label: 'Task History', icon: History },
   ];
 
   return (
-    <div className="h-screen w-screen flex flex-col bg-[#090B10] text-[#E6E9F2] overflow-hidden">
-      {/* Modern Balanced Top Header */}
-      <header className="h-11 px-3.5 bg-[#10131C] border-b border-[#1E2433] flex items-center justify-between gap-4 shrink-0">
-        <div className="flex items-center gap-3 min-w-0">
-          <button
-            type="button"
-            onClick={() => setActiveScreen('dashboard')}
-            className="flex items-center gap-2 whitespace-nowrap shrink-0"
-          >
-            <span className="w-6 h-6 rounded-[6px] bg-[#5B7CFF] text-[#090B10] font-bold text-[12px] flex items-center justify-center">
-              D
+    <div className="h-screen w-screen flex flex-col bg-[var(--surface-canvas)] text-[var(--ink-primary)] overflow-hidden select-none">
+      {/* Native Windows 11 Desktop Title Bar (36px) */}
+      <header className="h-9 bg-[var(--surface-chrome)] border-b border-[var(--border-hairline)] flex items-center justify-between px-2 shrink-0 win-drag-region z-30">
+        {/* Left: Brand + Desktop Menu Bar */}
+        <div className="flex items-center gap-1 win-no-drag">
+          <div className="flex items-center gap-2 px-1.5 mr-1">
+            <div className="w-5 h-5 rounded-[3px] bg-[var(--accent-primary)] text-[var(--accent-ink)] flex items-center justify-center">
+              <Code2 className="w-3.5 h-3.5" />
+            </div>
+            <span className="text-xs font-semibold tracking-tight text-[var(--ink-primary)] hidden sm:inline">
+              DevMind Studio
             </span>
-            <span className="text-[14px] font-bold tracking-tight text-[#E6E9F2]">DevMind AI</span>
-          </button>
+          </div>
 
-          <span className="text-[#2B3347]" aria-hidden="true">/</span>
+          {/* Menu Bar */}
+          {(
+            [
+              { id: 'file', label: 'File' },
+              { id: 'view', label: 'View' },
+              { id: 'extensions', label: 'Extensions' },
+              { id: 'help', label: 'Help' },
+            ] as Array<{ id: Exclude<MenuId, null>; label: string }>
+          ).map((menu) => (
+            <div key={menu.id} className="relative">
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenMenu((prev) => (prev === menu.id ? null : menu.id));
+                }}
+                className={`h-6 px-2 text-xs rounded-[3px] transition-colors ${
+                  openMenu === menu.id
+                    ? 'bg-[var(--surface-active)] text-[var(--ink-primary)]'
+                    : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                }`}
+              >
+                {menu.label}
+              </button>
 
+              {openMenu === menu.id && (
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="absolute left-0 top-7 w-56 rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] shadow-lg py-1 z-50 text-xs"
+                >
+                  {menu.id === 'file' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setImportModalOpen(true);
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--ink-primary)]"
+                      >
+                        Import Repository...
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          handleReindex();
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--ink-primary)]"
+                      >
+                        Rebuild AST Index
+                      </button>
+                      <div className="my-1 border-t border-[var(--border-hairline)]" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          handleLogout();
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] text-[var(--status-danger)]"
+                      >
+                        Sign Out
+                      </button>
+                    </>
+                  )}
+
+                  {menu.id === 'view' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCommandPaletteOpen(true);
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
+                      >
+                        <span>Command Palette</span>
+                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+K</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setExplorerOpen((v) => !v);
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
+                      >
+                        <span>Toggle Explorer</span>
+                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+B</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBottomPanelCollapsed((v) => !v);
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between"
+                      >
+                        <span>Toggle Workbench Panel</span>
+                        <span className="font-mono text-[10px] text-[var(--ink-muted)]">Ctrl+J</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRightPanelOpen((v) => !v);
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                      >
+                        Toggle Tasks Panel
+                      </button>
+                      <div className="my-1 border-t border-[var(--border-hairline)]" />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTheme((t) => (t === 'dark' ? 'light' : 'dark'));
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                      >
+                        Switch to {theme === 'dark' ? 'Windows Light' : 'Windows Dark'} Theme
+                      </button>
+                    </>
+                  )}
+
+                  {menu.id === 'extensions' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScreen('extensions');
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                      >
+                        Open Extensions Marketplace
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const res = await devmindApi.getExtensionsHost(activeProject?.id);
+                          setExtensionHost(res.host);
+                          setOpenMenu(null);
+                          showToast('Refreshed Extension Host.');
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                      >
+                        Refresh Extension Host
+                      </button>
+                      {(extensionHost?.activeCommands.length ?? 0) > 0 && (
+                        <>
+                          <div className="my-1 border-t border-[var(--border-hairline)]" />
+                          {extensionHost!.activeCommands.slice(0, 5).map((cmd) => (
+                            <button
+                              key={cmd.id}
+                              type="button"
+                              onClick={() => {
+                                handleExecuteExtensionCommand(cmd.id);
+                                setOpenMenu(null);
+                              }}
+                              className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)] truncate"
+                            >
+                              {cmd.title}
+                            </button>
+                          ))}
+                        </>
+                      )}
+                    </>
+                  )}
+
+                  {menu.id === 'help' && (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScreen('settings');
+                          setOpenMenu(null);
+                        }}
+                        className="w-full px-3 py-1.5 text-left hover:bg-[var(--surface-hover)]"
+                      >
+                        Windows .exe Packaging & Settings
+                      </button>
+                      <div className="px-3 py-1.5 text-[11px] font-mono text-[var(--ink-muted)]">
+                        Core Engine v{extensionHost?.engineVersion || '2.1.0'}
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Center: Command Palette Search Trigger */}
+        <button
+          type="button"
+          onClick={() => setCommandPaletteOpen(true)}
+          className="win-no-drag hidden md:flex items-center justify-between gap-3 h-6 w-[320px] lg:w-[380px] px-2.5 rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-xs text-[var(--ink-muted)] transition-colors"
+        >
+          <span className="inline-flex items-center gap-2 truncate">
+            <Search className="w-3 h-3 shrink-0" />
+            <span className="truncate">{activeProject?.name || 'Search files, symbols, commands...'}</span>
+          </span>
+          <span className="font-mono text-[10px] shrink-0">Ctrl+K</span>
+        </button>
+
+        {/* Right: Repo Switcher + Panel Toggles + Theme + Native Window Controls */}
+        <div className="flex items-center gap-1 win-no-drag">
           <select
-            aria-label="Active workspace repository"
-            value={activeProject.id}
-            onChange={(e) => void handleSelectProject(e.target.value)}
-            className="bg-[#090B10] border border-[#262E42] hover:border-[#3A4560] rounded-[6px] px-2.5 py-1 font-mono text-[12px] text-[#E6E9F2] outline-none max-w-[190px] truncate"
+            aria-label="Active repository"
+            value={activeProject?.id || ''}
+            onChange={(e) => handleSelectProject(e.target.value)}
+            className="h-6 max-w-[150px] px-2 text-[11px] rounded-[3px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] focus:outline-none focus:border-[var(--accent-primary)]"
           >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
+            {dedupeById(projects).map((proj) => (
+              <option key={proj.id} value={proj.id}>
+                {proj.name}
               </option>
             ))}
           </select>
 
-          <span className="hidden xl:inline-flex items-center gap-1.5 text-[11px] font-mono text-[#6B728A] whitespace-nowrap">
-            <span
-              className={`w-1.5 h-1.5 rounded-full ${sseConnected ? 'bg-[#2FD68B]' : 'bg-[#F5B642]'}`}
-            />
-            <span>{sseConnected ? 'Live Sync' : 'Reconnecting'}</span>
-          </span>
-        </div>
-
-        {/* Center Command Palette */}
-        <button
-          type="button"
-          onClick={() => setCommandPaletteOpen(true)}
-          className="hidden md:flex items-center justify-between gap-6 w-72 lg:w-80 px-3 py-1.5 rounded-[7px] bg-[#090B10] hover:bg-[#161A26] border border-[#1E2433] text-[12px] text-[#6B728A] transition-colors whitespace-nowrap"
-        >
-          <span className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5" />
-            <span>Search files, symbols, actions...</span>
-          </span>
-          <span className="font-mono text-[11px] text-[#A3AABF]">Ctrl+K</span>
-        </button>
-
-        {/* Right Controls */}
-        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setActiveScreen('settings')}
-            className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 text-[11px] font-mono text-[#A3AABF] hover:text-[#E6E9F2] bg-[#090B10] border border-[#1E2433] rounded-[6px] whitespace-nowrap max-w-[170px] truncate"
-            title="Switch or test your connected LLM API"
+            onClick={() => setExplorerOpen((v) => !v)}
+            title="Toggle Explorer (Ctrl+B)"
+            className={`p-1 rounded-[3px] ${
+              explorerOpen ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
+            } hover:bg-[var(--surface-hover)]`}
           >
-            <KeyRound className="w-3 h-3 text-[#5B7CFF] shrink-0" />
-            <span className="truncate">
-              {session.llm.configured ? `${session.llm.provider}/${session.llm.model}` : 'Set LLM API'}
-            </span>
+            <PanelLeft className="w-3.5 h-3.5" />
           </button>
 
           <button
             type="button"
-            onClick={() => void handleRunSandboxTests()}
-            disabled={runningTests}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-semibold bg-[#5B7CFF] hover:bg-[#7C96FF] disabled:opacity-60 text-[#090B10] rounded-[6px] transition-colors whitespace-nowrap"
+            onClick={() => setBottomPanelCollapsed((v) => !v)}
+            title="Toggle Bottom Panel (Ctrl+J)"
+            className={`p-1 rounded-[3px] ${
+              !bottomPanelCollapsed ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
+            } hover:bg-[var(--surface-hover)]`}
           >
-            <Play className="w-3.5 h-3.5" />
-            <span>{runningTests ? 'Testing...' : 'Run Tests'}</span>
+            <PanelBottom className="w-3.5 h-3.5" />
           </button>
 
-          <div className="flex items-center gap-0.5 pl-2 border-l border-[#1E2433]">
+          <button
+            type="button"
+            onClick={() => setRightPanelOpen((v) => !v)}
+            title="Toggle Tasks Panel"
+            className={`p-1 rounded-[3px] ${
+              rightPanelOpen ? 'text-[var(--ink-primary)]' : 'text-[var(--ink-muted)]'
+            } hover:bg-[var(--surface-hover)]`}
+          >
+            <PanelRight className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTheme((t) => (t === 'dark' ? 'light' : 'dark'))}
+            title={`Switch to ${theme === 'dark' ? 'Light' : 'Dark'} mode`}
+            className="p-1 rounded-[3px] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+          >
+            {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleLogout}
+            title="Sign Out"
+            className="p-1 rounded-[3px] text-[var(--ink-secondary)] hover:text-[var(--status-danger)] hover:bg-[var(--surface-hover)]"
+          >
+            <LogOut className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Native Windows Caption Buttons */}
+          <div className="ml-1 pl-1 border-l border-[var(--border-hairline)] flex items-center">
+            {window.devmindDesktop && (
+              <button
+                type="button"
+                onClick={() => window.devmindDesktop?.minimize()}
+                title="Minimize"
+                className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
+              >
+                <Minus className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setShowExplorerDrawer((v) => !v)}
-              title="Toggle File Explorer"
-              aria-label="Toggle File Explorer"
-              className={`p-1.5 rounded-[5px] transition-colors ${
-                showExplorerDrawer ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
-              }`}
+              onClick={handleToggleMaximize}
+              title={isMaximized ? 'Restore' : 'Maximize'}
+              className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
             >
-              <PanelLeft className="w-4 h-4" />
+              {isMaximized ? <Minimize2 className="w-3 h-3" /> : <Maximize2 className="w-3 h-3" />}
             </button>
-            <button
-              type="button"
-              onClick={() => setShowBottomPanel((v) => !v)}
-              title="Toggle Sandbox Terminal"
-              aria-label="Toggle Sandbox Terminal"
-              className={`p-1.5 rounded-[5px] transition-colors ${
-                showBottomPanel ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
-              }`}
-            >
-              <PanelBottom className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowRightPanel((v) => !v)}
-              title="Toggle AI Panel (Ctrl+J)"
-              aria-label="Toggle AI Panel"
-              className={`p-1.5 rounded-[5px] transition-colors ${
-                showRightPanel ? 'text-[#E6E9F2] bg-[#161A26]' : 'text-[#6B728A] hover:text-[#E6E9F2]'
-              }`}
-            >
-              <PanelRight className="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleLogout()}
-              title={`Sign out (${session.email})`}
-              aria-label="Sign out"
-              className="p-1.5 rounded-[5px] text-[#6B728A] hover:text-[#FF5468] transition-colors"
-            >
-              <LogOut className="w-4 h-4" />
-            </button>
+            {window.devmindDesktop && (
+              <button
+                type="button"
+                onClick={() => window.devmindDesktop?.close()}
+                title="Close"
+                className="w-8 h-7 flex items-center justify-center text-[var(--ink-secondary)] hover:bg-[#c42b1c] hover:text-white"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
       </header>
 
-      {/* Main Studio Area: Slim Activity Rail + Explorer Drawer + Center/Bottom + Right AI */}
-      <div className="flex-1 flex min-h-0 overflow-hidden">
-        {/* Slim 52px Activity Rail */}
+      {/* Main Workbench Area */}
+      <div className="flex-1 flex min-h-0 overflow-hidden select-text">
+        {/* Left VS Code-Style Activity Rail (48px) */}
         <nav
-          aria-label="Primary Workspace Navigation"
-          className="w-[52px] bg-[#0D1017] border-r border-[#1E2433] flex flex-col items-center py-2.5 gap-1.5 shrink-0"
+          aria-label="Primary workbench navigation"
+          className="w-12 shrink-0 bg-[var(--surface-chrome)] border-r border-[var(--border-hairline)] flex flex-col items-center justify-between py-1.5 select-none"
         >
-          {navItems.map((item) => {
-            const isActive = activeScreen === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                title={item.label}
-                aria-label={item.label}
-                onClick={() => setActiveScreen(item.id)}
-                className={`relative w-9 h-9 rounded-[8px] flex items-center justify-center transition-colors ${
-                  isActive
-                    ? 'bg-[#5B7CFF]/20 text-[#7C96FF]'
-                    : 'text-[#6B728A] hover:text-[#E6E9F2] hover:bg-[#161A26]'
-                }`}
-              >
-                {item.icon}
-                {item.badge !== undefined && (
-                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-[#161A26] border border-[#2B3347] font-mono text-[9px] text-[#E6E9F2] flex items-center justify-center tabular-nums">
-                    {item.badge}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+          <div className="flex flex-col items-center gap-1 w-full">
+            {navItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = screen === item.id;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={() => {
+                    if (item.id === 'explorer' && screen === 'explorer') {
+                      setExplorerOpen((v) => !v);
+                    } else {
+                      setScreen(item.id);
+                    }
+                  }}
+                  title={item.label}
+                  className={`relative w-full h-10 flex items-center justify-center transition-colors ${
+                    isActive
+                      ? 'text-[var(--ink-primary)] bg-[var(--surface-active)]'
+                      : 'text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]'
+                  }`}
+                >
+                  {isActive && (
+                    <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] bg-[var(--accent-primary)]" />
+                  )}
+                  <Icon className="w-[18px] h-[18px]" />
+                  {item.badge !== undefined && item.badge > 0 && (
+                    <span className="absolute top-1 right-1 min-w-[14px] h-[14px] px-1 rounded-full bg-[var(--accent-primary)] text-[var(--accent-ink)] text-[9px] font-mono font-semibold flex items-center justify-center">
+                      {item.badge > 9 ? '9+' : item.badge}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setScreen('settings')}
+            title="Settings & Windows Runtime"
+            className={`relative w-full h-10 flex items-center justify-center transition-colors ${
+              screen === 'settings'
+                ? 'text-[var(--ink-primary)] bg-[var(--surface-active)]'
+                : 'text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]'
+            }`}
+          >
+            {screen === 'settings' && (
+              <span className="absolute left-0 top-1.5 bottom-1.5 w-[2px] bg-[var(--accent-primary)]" />
+            )}
+            <Settings className="w-[18px] h-[18px]" />
+          </button>
         </nav>
 
-        {/* Collapsible Project File Explorer Drawer */}
-        {showExplorerDrawer && (
-          <>
-            <aside
-              style={{ width: leftWidth }}
-              className="flex flex-col bg-[#10131C] border-r border-[#1E2433] shrink-0 min-h-0"
-            >
-              <div className="flex items-center justify-between px-3 h-10 border-b border-[#1E2433] shrink-0">
-                <span className="text-[12px] font-semibold text-[#E6E9F2] truncate">
-                  Explorer
-                </span>
-                <div className="flex items-center gap-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setCreatingFile((v) => !v)}
-                    title="New File"
-                    aria-label="New File"
-                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
-                  >
-                    <FilePlus2 className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setImportModalOpen(true)}
-                    title="Import Local Repository"
-                    aria-label="Import Local Repository"
-                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
-                  >
-                    <FolderPlus className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void handleReindex()}
-                    title="Re-index Repository"
-                    aria-label="Re-index Repository"
-                    className="p-1 text-[#A3AABF] hover:text-[#E6E9F2] rounded hover:bg-[#161A26]"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                  </button>
-                  {projects.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteProject((v) => !v)}
-                      title="Delete Active Project"
-                      aria-label="Delete Active Project"
-                      className="p-1 text-[#6B728A] hover:text-[#FF5468] rounded hover:bg-[#161A26]"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {confirmDeleteProject && projects.length > 1 && (
-                <div className="p-2.5 border-b border-[#FF5468]/30 bg-[#FF5468]/10 space-y-2 text-[11px]">
-                  <p className="text-[#E6E9F2]">
-                    Delete <span className="font-mono text-[#FF5468]">{activeProject.name}</span> from workspace?
-                  </p>
-                  <div className="flex items-center justify-end gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setConfirmDeleteProject(false)}
-                      className="px-2 py-0.5 text-[#A3AABF] hover:text-[#E6E9F2]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleDeleteCurrentProject()}
-                      className="px-2 py-0.5 font-semibold bg-[#FF5468] text-[#090B10] rounded-[4px]"
-                    >
-                      Confirm Delete
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Inline New File Creator */}
-              {creatingFile && (
-                <form
-                  onSubmit={(e) => void handleCreateNewFile(e)}
-                  className="p-2 border-b border-[#1E2433] bg-[#0B0E14] space-y-1.5"
+        {/* Collapsible File Explorer Sidebar (visible in Code Editor view) */}
+        {screen === 'explorer' && explorerOpen && (
+          <aside className="w-[240px] shrink-0 bg-[var(--surface-sidebar)] border-r border-[var(--border-hairline)] flex flex-col overflow-hidden">
+            <div className="h-9 px-3 border-b border-[var(--border-hairline)] flex items-center justify-between">
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ink-secondary)]">
+                Explorer
+              </span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={handleReindex}
+                  title="Rebuild AST index"
+                  className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
                 >
-                  <input
-                    type="text"
-                    value={newFilePath}
-                    onChange={(e) => setNewFilePath(e.target.value)}
-                    placeholder="src/helper.ts"
-                    autoFocus
-                    className="w-full bg-[#10131C] border border-[#5B7CFF] rounded-[5px] px-2 py-1 font-mono text-[11px] text-[#E6E9F2] outline-none"
-                  />
-                  <div className="flex items-center justify-end gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setCreatingFile(false)}
-                      className="text-[11px] text-[#6B728A] hover:text-[#E6E9F2]"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      className="px-2 py-0.5 text-[11px] font-semibold bg-[#5B7CFF] text-[#090B10] rounded-[4px]"
-                    >
-                      Create
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {/* File Tree */}
-              <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {groupedFiles.map(([dir, files]) => {
-                  const collapsed = Boolean(collapsedDirs[dir]);
-                  return (
-                    <div key={dir}>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setCollapsedDirs((prev) => ({ ...prev, [dir]: !prev[dir] }))
-                        }
-                        className="w-full flex items-center gap-1.5 px-1.5 py-1 text-[12px] text-[#A3AABF] hover:text-[#E6E9F2] rounded"
-                      >
-                        {collapsed ? (
-                          <ChevronRight className="w-3.5 h-3.5 text-[#6B728A]" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5 text-[#6B728A]" />
-                        )}
-                        <Folder className="w-3.5 h-3.5 text-[#5B7CFF]/80 shrink-0" />
-                        <span className="font-mono text-[12px] truncate">{dir}</span>
-                      </button>
-
-                      {!collapsed && (
-                        <div className="pl-4 space-y-0.5 mt-0.5">
-                          {files.map((file) => {
-                            const fileName = file.path.split('/').pop() ?? file.path;
-                            const isSelected =
-                              activeScreen === 'explorer' && activeFilePath === file.path && !activeDiffChange;
-                            const issueCount = securityFindings.filter(
-                              (f) => f.filePath === file.path
-                            ).length;
-                            return (
-                              <button
-                                key={file.path}
-                                type="button"
-                                onClick={() => handleOpenFileAtLine(file.path)}
-                                className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded-[5px] text-left transition-colors ${
-                                  isSelected
-                                    ? 'bg-[#161A26] text-[#E6E9F2]'
-                                    : 'text-[#A3AABF] hover:text-[#E6E9F2] hover:bg-[#161A26]/40'
-                                }`}
-                              >
-                                <span className="font-mono text-[12px] truncate">{fileName}</span>
-                                <span className="flex items-center gap-1.5 font-mono text-[11px] shrink-0">
-                                  {file.gitStatus === 'modified' && (
-                                    <span className="text-[#F5B642]" title="Modified">
-                                      M
-                                    </span>
-                                  )}
-                                  {issueCount > 0 && (
-                                    <span
-                                      className="text-[#FF5468] tabular-nums"
-                                      title={`${issueCount} security findings`}
-                                    >
-                                      {issueCount}
-                                    </span>
-                                  )}
-                                </span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
+                  <RefreshCw className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImportModalOpen(true)}
+                  title="Import repository"
+                  className="p-1 rounded text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+                >
+                  <FolderGit2 className="w-3.5 h-3.5" />
+                </button>
               </div>
-            </aside>
+            </div>
 
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              onMouseDown={() => beginDrag('left')}
-              className="w-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-col-resize transition-colors shrink-0"
-            />
-          </>
+            <div className="px-3 py-2 border-b border-[var(--border-hairline)] bg-[var(--surface-subtle)]">
+              <div className="text-xs font-semibold text-[var(--ink-primary)] truncate">
+                {activeProject?.name || 'Workspace'}
+              </div>
+              <div className="text-[10px] font-mono text-[var(--ink-muted)] truncate mt-0.5">
+                {activeProject?.localPath}
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto py-1">
+              {activeProject?.files.map((f) => {
+                const isSelected = activeFile?.path === f.path;
+                const fileIssueCount =
+                  securityFindings.filter((s) => s.filePath === f.path && s.status === 'open').length +
+                  (extensionHost?.diagnostics.filter((d) => d.filePath === f.path).length ?? 0);
+
+                return (
+                  <button
+                    key={f.path}
+                    type="button"
+                    onClick={() => {
+                      setActiveFilePath(f.path);
+                      setHighlightLine(null);
+                      setPendingDiff(null);
+                    }}
+                    className={`w-full px-3 py-1.5 text-left flex items-center justify-between gap-2 text-xs transition-colors ${
+                      isSelected
+                        ? 'bg-[var(--surface-active)] text-[var(--ink-primary)] font-medium'
+                        : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]'
+                    }`}
+                  >
+                    <span className="inline-flex items-center gap-2 min-w-0">
+                      <FileCode2 className="w-3.5 h-3.5 text-[var(--ink-muted)] shrink-0" />
+                      <span className="truncate font-mono text-[11px]">{f.path}</span>
+                    </span>
+                    <span className="flex items-center gap-1 shrink-0 font-mono text-[10px]">
+                      {f.gitStatus === 'modified' && (
+                        <span className="text-[var(--status-warning)]">M</span>
+                      )}
+                      {fileIssueCount > 0 && (
+                        <span className="text-[var(--status-danger)]">{fileIssueCount}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Outline Symbols Preview */}
+            {activeFile && activeProject && (
+              <div className="border-t border-[var(--border-hairline)] max-h-[160px] flex flex-col">
+                <div className="px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--ink-muted)] bg-[var(--surface-chrome)]">
+                  Outline Symbols
+                </div>
+                <div className="overflow-y-auto py-1">
+                  {activeProject.symbols
+                    .filter((s) => s.filePath === activeFile.path)
+                    .slice(0, 12)
+                    .map((sym) => (
+                      <button
+                        key={sym.id}
+                        type="button"
+                        onClick={() => setHighlightLine(sym.startLine)}
+                        className="w-full px-3 py-1 text-left hover:bg-[var(--surface-hover)] flex items-center justify-between gap-2 text-[11px]"
+                      >
+                        <span className="font-mono text-[var(--ink-secondary)] truncate">{sym.name}</span>
+                        <span className="font-mono text-[10px] text-[var(--ink-muted)] tabular-nums">
+                          :{sym.startLine}
+                        </span>
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+          </aside>
         )}
 
-        {/* CENTER + BOTTOM STACK */}
-        <div className="flex-1 flex flex-col min-w-0 min-h-0">
+        {/* Center Workbench + Bottom Panel */}
+        <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
           <main className="flex-1 min-h-0 overflow-hidden">
-            {activeScreen === 'dashboard' && (
+            {screen === 'explorer' && (
+              <CodeEditorView
+                file={activeFile}
+                highlightLine={highlightLine}
+                pendingDiff={pendingDiff}
+                securityFindings={securityFindings}
+                extensionDiagnostics={extensionHost?.diagnostics ?? []}
+                activeCommands={extensionHost?.activeCommands ?? []}
+                onSaveFile={handleSaveFile}
+                onCreateFile={handleCreateFile}
+                onDeleteFile={handleDeleteFile}
+                onRunExtensionCommand={handleExecuteExtensionCommand}
+                onCursorChange={setCursorPos}
+                onClearDiff={() => setPendingDiff(null)}
+              />
+            )}
+
+            {screen === 'extensions' && (
+              <ExtensionsView
+                host={extensionHost}
+                activeProjectId={activeProject?.id || ''}
+                activeFilePath={activeFile?.path ?? null}
+                onInstall={handleInstallExtension}
+                onUninstall={handleUninstallExtension}
+                onToggle={handleToggleExtension}
+                onActivate={handleActivateExtension}
+                onExecuteCommand={handleExecuteExtensionCommand}
+                onRefresh={async () => {
+                  const res = await devmindApi.getExtensionsHost(activeProject?.id);
+                  setExtensionHost(res.host);
+                }}
+              />
+            )}
+
+            {screen === 'dashboard' && (
               <DashboardView
-                project={activeProject}
                 projects={projects}
+                activeProject={activeProject}
                 tasks={tasks}
                 securityFindings={securityFindings}
-                testRuns={testRuns}
+                extensionHost={extensionHost}
                 usage={usage}
-                runningTests={runningTests}
-                onSelectProject={(id) => void handleSelectProject(id)}
-                onNavigate={setActiveScreen}
-                onRunSandboxTests={async () => {
-                  await handleRunSandboxTests();
-                }}
-                onLaunchMilestoneDemo={handleLaunchMilestoneDemo}
-                onSelectTask={(t) => {
-                  setActiveTaskId(t.id);
-                  setShowRightPanel(true);
-                }}
+                onSelectProject={handleSelectProject}
+                onNavigate={setScreen}
                 onOpenImportModal={() => setImportModalOpen(true)}
+                onReindex={handleReindex}
+                onExecuteExtensionCommand={handleExecuteExtensionCommand}
+                onOpenFileLine={handleOpenFileLine}
               />
             )}
 
-            {activeScreen === 'explorer' && (
-              <CodeEditorView
-                project={activeProject}
-                openTabs={openTabs}
-                activeFilePath={activeFilePath}
-                highlightLine={highlightLine}
-                activeDiffChange={activeDiffChange}
-                securityFindings={securityFindings}
-                onSelectTab={(p) => {
-                  setActiveDiffChange(null);
-                  setActiveFilePath(p);
-                }}
-                onCloseTab={handleCloseTab}
-                onCloseDiff={() => setActiveDiffChange(null)}
-                onSaveFile={handleSaveFile}
-                onDeleteFile={handleDeleteFile}
-                onJumpToLine={handleOpenFileAtLine}
-              />
-            )}
-
-            {activeScreen === 'brain' && (
+            {screen === 'brain' && (
               <RepoBrainView
                 project={activeProject}
+                onSearch={async (q) => {
+                  if (!activeProject) return [];
+                  const res = await devmindApi.searchRepo(activeProject.id, q);
+                  return res.hits;
+                }}
                 onReindex={handleReindex}
-                onOpenFileAtLine={handleOpenFileAtLine}
+                onOpenFileLine={handleOpenFileLine}
               />
             )}
 
-            {activeScreen === 'debugging' && (
+            {screen === 'debugging' && (
               <DebuggingCenterView
-                project={activeProject}
                 analyses={debugAnalyses}
-                latestTestRun={testRuns[0] ?? null}
-                analyzing={debugBusy}
-                onRunAnalysis={handleRunDebugAnalysis}
-                onRunSandboxTests={handleRunSandboxTests}
-                onOpenFileAtLine={handleOpenFileAtLine}
-                onDispatchToAgent={handleDispatchPromptToAgent}
+                diagnostics={extensionHost?.diagnostics ?? []}
+                securityFindings={securityFindings}
+                onAnalyzeError={handleAnalyzeError}
+                onFixWithAgent={async (prompt) => {
+                  await handleCreateTask('Fix Diagnosed Root Cause', prompt, 'approval', 'high');
+                  setRightPanelOpen(true);
+                  showToast('Dispatched root-cause patch task.');
+                }}
+                onOpenCitation={handleOpenCitation}
               />
             )}
 
-            {activeScreen === 'security' && (
+            {screen === 'security' && (
               <SecurityCenterView
-                project={activeProject}
                 findings={securityFindings}
-                onRefreshScan={handleReindex}
-                onOpenFileAtLine={(fp, ln) => handleOpenFileAtLine(fp, ln)}
-                onRemediateWithAgent={handleDispatchPromptToAgent}
+                usage={usage}
+                onRemediateWithAgent={handleRemediateSecurity}
+                onOpenFileLine={handleOpenFileLine}
               />
             )}
 
-            {activeScreen === 'history' && (
+            {screen === 'history' && (
               <ExecutionHistoryView
                 tasks={tasks}
-                onSelectTask={(t) => {
-                  setActiveTaskId(t.id);
-                  setShowRightPanel(true);
-                }}
-                onInspectDiff={handleInspectDiff}
+                onOpenDiff={handleOpenDiff}
                 onRollbackTask={handleRollbackTask}
                 onUpdateTaskPriority={handleUpdateTaskPriority}
               />
             )}
 
-            {activeScreen === 'settings' && (
+            {screen === 'settings' && (
               <SettingsPolicyView
                 session={session}
                 policies={policies}
                 presets={presets}
                 usage={usage}
-                onUpdateLlm={handleUpdateLlm}
-                onUpdatePolicy={handleUpdatePolicy}
-                onUpdateBudget={handleUpdateBudget}
+                theme={theme}
+                onThemeChange={setTheme}
+                onSessionUpdated={setSession}
+                onUpdatePolicy={async (actionType, level: PermissionLevel) => {
+                  const res = await devmindApi.updatePolicy(actionType, level);
+                  setPolicies(res.policies);
+                }}
+                onUpdateBudget={async (budgetUsd, tokenLimit) => {
+                  const res = await devmindApi.updateBudget(budgetUsd, tokenLimit);
+                  setUsage(res.usage);
+                }}
               />
             )}
           </main>
 
-          {showBottomPanel && (
-            <>
-              <div
-                role="separator"
-                aria-orientation="horizontal"
-                onMouseDown={() => beginDrag('bottom')}
-                className="h-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-row-resize transition-colors shrink-0"
-              />
-              <div style={{ height: bottomHeight }} className="shrink-0 min-h-0">
-                <BottomSandboxPanel
-                  testRuns={testRuns}
-                  auditLogs={auditLogs}
-                  runningTests={runningTests}
-                  onRunTests={async () => {
-                    await handleRunSandboxTests();
-                  }}
-                  onClose={() => setShowBottomPanel(false)}
-                />
-              </div>
-            </>
-          )}
+          <BottomWorkbenchPanel
+            diagnostics={extensionHost?.diagnostics ?? []}
+            securityFindings={securityFindings}
+            runtimeLogs={extensionHost?.runtimeLogs ?? []}
+            auditLogs={auditLogs}
+            activeTab={bottomTab}
+            onTabChange={setBottomTab}
+            collapsed={bottomPanelCollapsed}
+            onToggleCollapse={() => setBottomPanelCollapsed((v) => !v)}
+            onOpenFileLine={handleOpenFileLine}
+          />
         </div>
 
-        {/* RIGHT AI PANEL */}
-        {showRightPanel && (
-          <>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              onMouseDown={() => beginDrag('right')}
-              className="w-1 bg-transparent hover:bg-[#5B7CFF]/60 cursor-col-resize transition-colors shrink-0"
+        {/* Right Engineering Tasks & Repo Query Panel */}
+        {rightPanelOpen && (
+          <div className="w-[340px] xl:w-[370px] shrink-0 hidden lg:block">
+            <AiWorkspacePanel
+              session={session}
+              activeProjectName={activeProject?.name || 'Workspace'}
+              tasks={tasks}
+              chatMessages={chatMessages}
+              onCreateTask={handleCreateTask}
+              onDecideApproval={handleDecideApproval}
+              onRollbackTask={handleRollbackTask}
+              onCancelTask={handleCancelTask}
+              onSendChat={handleSendChat}
+              onOpenDiff={handleOpenDiff}
+              onOpenCitation={handleOpenCitation}
             />
-            <div style={{ width: rightWidth }} className="shrink-0 min-h-0">
-              <AiWorkspacePanel
-                project={activeProject}
-                session={session}
-                activeTask={activeTask}
-                chatMessages={chatMessages}
-                agentBusy={agentBusy}
-                chatBusy={chatBusy}
-                draftTaskPrompt={draftTaskPrompt}
-                onDraftTaskPromptChange={setDraftTaskPrompt}
-                onStartTask={handleStartTask}
-                onDecideApproval={handleDecideApproval}
-                onRollbackTask={handleRollbackTask}
-                onSendChat={handleSendChat}
-                onInspectDiff={handleInspectDiff}
-                onOpenFileAtLine={handleOpenFileAtLine}
-                onOpenLlmSettings={() => setActiveScreen('settings')}
-              />
-            </div>
-          </>
+          </div>
         )}
       </div>
 
-      {/* Overlays */}
+      {/* Native Windows Status Bar (24px) with Live Extension Status Contributions */}
+      <footer className="h-6 bg-[var(--surface-chrome)] border-t border-[var(--border-hairline)] px-2.5 flex items-center justify-between text-[11px] text-[var(--ink-secondary)] shrink-0 select-none">
+        <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+          <span className="inline-flex items-center gap-1 font-mono text-[var(--ink-primary)] shrink-0">
+            <GitBranch className="w-3 h-3 text-[var(--accent-primary)]" />
+            {activeProject?.defaultBranch || 'main'}
+          </span>
+
+          <button
+            type="button"
+            onClick={() => {
+              setBottomTab('problems');
+              setBottomPanelCollapsed(false);
+            }}
+            className="inline-flex items-center gap-1.5 hover:text-[var(--ink-primary)] font-mono tabular-nums shrink-0"
+            title="Show Problems panel"
+          >
+            <AlertCircle className="w-3 h-3 text-[var(--status-danger)]" />
+            <span>{errorProblemsCount}</span>
+            <AlertTriangle className="w-3 h-3 text-[var(--status-warning)] ml-0.5" />
+            <span>{warningProblemsCount}</span>
+          </button>
+
+          {/* Extension Status Bar Items (Left Alignment) */}
+          {(extensionHost?.statusBarItems ?? [])
+            .filter((item) => item.alignment === 'left')
+            .map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                title={item.tooltip}
+                onClick={() => {
+                  if (item.commandId) {
+                    handleExecuteExtensionCommand(item.commandId);
+                  } else {
+                    setScreen('extensions');
+                  }
+                }}
+                className="hidden sm:inline-flex items-center px-1.5 h-5 rounded-[2px] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)] font-mono truncate max-w-[170px]"
+              >
+                {item.text}
+              </button>
+            ))}
+        </div>
+
+        <div className="flex items-center gap-3 shrink-0 font-mono">
+          {/* Extension Status Bar Items (Right Alignment) */}
+          {(extensionHost?.statusBarItems ?? [])
+            .filter((item) => item.alignment === 'right')
+            .map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                title={item.tooltip}
+                onClick={() => {
+                  if (item.commandId) {
+                    handleExecuteExtensionCommand(item.commandId);
+                  } else {
+                    setScreen('extensions');
+                  }
+                }}
+                className="hidden xl:inline-flex items-center px-1.5 h-5 rounded-[2px] hover:bg-[var(--surface-hover)] hover:text-[var(--ink-primary)]"
+              >
+                {item.text}
+              </button>
+            ))}
+
+          {screen === 'explorer' && activeFile && (
+            <span className="tabular-nums hidden md:inline">
+              Ln {cursorPos.line}, Col {cursorPos.col} · {activeFile.language}
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setScreen('extensions')}
+            className="inline-flex items-center gap-1 hover:text-[var(--ink-primary)]"
+            title="Open Extensions Marketplace"
+          >
+            <Blocks className="w-3 h-3 text-[var(--accent-primary)]" />
+            <span className="tabular-nums">{activeExtensionsCount} Ext</span>
+          </button>
+
+          <span className="hidden sm:inline text-[var(--ink-muted)]">
+            {sseConnected ? 'Sync Active' : 'Reconnecting'}
+          </span>
+        </div>
+      </footer>
+
+      {/* Unobtrusive Desktop Toast Notification */}
+      {toast && (
+        <div
+          className={`fixed bottom-9 right-4 z-50 px-3.5 py-2 rounded-[4px] border shadow-lg text-xs flex items-center gap-2.5 max-w-md ${
+            toast.tone === 'error'
+              ? 'bg-[var(--surface-elevated)] border-[var(--status-danger)] text-[var(--status-danger)]'
+              : 'bg-[var(--surface-elevated)] border-[var(--border-strong)] text-[var(--ink-primary)]'
+          }`}
+        >
+          <span>{toast.text}</span>
+          <button
+            type="button"
+            onClick={() => setToast(null)}
+            className="text-[var(--ink-muted)] hover:text-[var(--ink-primary)]"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Command Palette & Import Repository Modals */}
       <CommandPalette
         open={commandPaletteOpen}
         project={activeProject}
+        activeFilePath={activeFile?.path ?? null}
+        activeCommands={extensionHost?.activeCommands ?? []}
         onClose={() => setCommandPaletteOpen(false)}
-        onOpenFileAtLine={handleOpenFileAtLine}
-        onNavigate={setActiveScreen}
-        onRunSandboxTests={async () => {
-          await handleRunSandboxTests();
-        }}
-        onLaunchMilestoneDemo={handleLaunchMilestoneDemo}
-        onToggleRightPanel={() => setShowRightPanel((v) => !v)}
+        onNavigate={setScreen}
+        onOpenFile={handleOpenFileLine}
+        onRunExtensionCommand={handleExecuteExtensionCommand}
+        onReindex={handleReindex}
       />
 
       <ImportRepoModal
         open={importModalOpen}
         onClose={() => setImportModalOpen(false)}
-        onCreateProject={handleCreateProject}
+        onImport={handleCreateProject}
       />
-
-      {toasts.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-50 space-y-2 max-w-sm pointer-events-none">
-          {toasts.map((toast) => (
-            <div
-              key={toast.id}
-              className={`toast-animate-in pointer-events-auto px-3.5 py-2.5 rounded-[8px] bg-[#161A26] border text-[12px] text-[#E6E9F2] shadow-lg flex items-center gap-2 ${
-                toast.tone === 'success'
-                  ? 'border-[#2FD68B]/50'
-                  : toast.tone === 'warning'
-                    ? 'border-[#F5B642]/60'
-                    : toast.tone === 'error'
-                      ? 'border-[#FF5468]/60'
-                      : 'border-[#2B3347]'
-              }`}
-            >
-              <Bot className="w-3.5 h-3.5 text-[#5B7CFF] shrink-0" />
-              <span>{toast.message}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
+
+export default App;

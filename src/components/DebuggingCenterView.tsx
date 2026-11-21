@@ -1,167 +1,234 @@
 import React, { useState } from 'react';
-import { Bug, Play, Terminal, Wand2 } from 'lucide-react';
-import type { DebugAnalysis, Project, TestRun } from '../types/devmind';
+import {
+  AlertTriangle,
+  Bug,
+  FileCode2,
+  Loader2,
+  Search,
+  Wrench,
+} from 'lucide-react';
+import type {
+  CodeCitation,
+  DebugAnalysis,
+  ExtensionDiagnostic,
+  SecurityFinding,
+} from '../types/devmind';
 
 interface DebuggingCenterViewProps {
-  project: Project;
   analyses: DebugAnalysis[];
-  latestTestRun: TestRun | null;
-  analyzing: boolean;
-  onRunAnalysis: (errorLog: string) => Promise<void>;
-  onRunSandboxTests: () => Promise<TestRun | null>;
-  onOpenFileAtLine: (filePath: string, line?: number) => void;
-  onDispatchToAgent: (prompt: string) => void;
+  diagnostics: ExtensionDiagnostic[];
+  securityFindings: SecurityFinding[];
+  onAnalyzeError: (errorLog: string) => Promise<void>;
+  onFixWithAgent: (prompt: string) => Promise<void>;
+  onOpenCitation: (citation: CodeCitation) => void;
 }
 
-export const DebuggingCenterView: React.FC<DebuggingCenterViewProps> = ({
-  project,
-  analyses,
-  latestTestRun,
-  analyzing,
-  onRunAnalysis,
-  onRunSandboxTests,
-  onOpenFileAtLine,
-  onDispatchToAgent,
-}) => {
-  const [errorLog, setErrorLog] = useState(
-    `AssertionError [ERR_ASSERTION]: Expected authenticateRequest to accept lowercase "bearer <token>" header
-    at TestContext.<anonymous> (tests/auth.test.ts:53:10)
-    actual: 401 ("Invalid authorization scheme")
-    expected: 200 (authenticated user usr_204)`
-  );
-  const [capturing, setCapturing] = useState(false);
+const SAMPLE_STACK_TRACE = `TypeError: Cannot read properties of null (reading 'role')
+    at verifySessionToken (src/services/authService.ts:44:21)
+    at requireAuthenticatedUser (src/routes/sessionRoute.ts:18:16)
+    at Layer.handle [as handle_request] (node_modules/express/lib/router/layer.js:95:5)`;
 
-  const handleCaptureLiveError = async () => {
-    setCapturing(true);
-    try {
-      const run = latestTestRun && latestTestRun.failedCount > 0 ? latestTestRun : await onRunSandboxTests();
-      if (!run) return;
-      const failedCases = run.cases.filter((c) => c.status === 'fail');
-      if (failedCases.length === 0) {
-        setErrorLog(`All ${run.totalCount} tests in ${project.name} currently pass (${run.sandboxId}).`);
-      } else {
-        setErrorLog(
-          failedCases
-            .map((c) => `FAIL: ${c.name}\n  ${c.errorMessage ?? 'Assertion failed'}`)
-            .join('\n\n')
-        );
-      }
-    } finally {
-      setCapturing(false);
+export const DebuggingCenterView: React.FC<DebuggingCenterViewProps> = ({
+  analyses,
+  diagnostics,
+  securityFindings,
+  onAnalyzeError,
+  onFixWithAgent,
+  onOpenCitation,
+}) => {
+  const [errorLog, setErrorLog] = useState('');
+  const [analyzing, setAnalyzing] = useState(false);
+  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const openFindings = securityFindings.filter((f) => f.status === 'open');
+
+  const handleLoadActiveProblems = () => {
+    const lines: string[] = [];
+    for (const f of openFindings.slice(0, 4)) {
+      lines.push(`[Security ${f.cwe}] ${f.title} at ${f.filePath}:${f.line} — ${f.description}`);
+    }
+    for (const d of diagnostics.slice(0, 4)) {
+      lines.push(`[${d.source} ${d.code}] ${d.message} at ${d.filePath}:${d.line}`);
+    }
+    if (lines.length === 0) {
+      setErrorLog(SAMPLE_STACK_TRACE);
+    } else {
+      setErrorLog(lines.join('\n'));
     }
   };
 
-  const safeAnalyses = Array.isArray(analyses) ? analyses : [];
+  const handleAnalyze = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!errorLog.trim() || analyzing) return;
+    setErrorMessage(null);
+    setAnalyzing(true);
+    try {
+      await onAnalyzeError(errorLog.trim());
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Diagnostics analysis failed.');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const handleDispatchFix = async (analysis: DebugAnalysis) => {
+    setDispatchingId(analysis.id);
+    setErrorMessage(null);
+    try {
+      await onFixWithAgent(analysis.proposedPatchPrompt);
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to create patch task.');
+    } finally {
+      setDispatchingId(null);
+    }
+  };
 
   return (
-    <div className="h-full overflow-auto bg-[#090B10] p-6 space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#262B3A] pb-4">
+    <div className="h-full overflow-y-auto bg-[var(--surface-canvas)] p-6 space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--border-hairline)] pb-4">
         <div>
-          <h1 className="text-[20px] font-semibold text-[#E6E9F2] tracking-tight">
-            Intelligent Debugging Center
+          <h1 className="text-lg font-semibold text-[var(--ink-primary)] tracking-tight">
+            Diagnostics & Root Cause Analyzer
           </h1>
-          <p className="text-[13px] text-[#A3AABF] mt-1">
-            Paste a stack trace or capture failing sandbox output to isolate root causes grounded in {project.name}.
+          <p className="text-xs text-[var(--ink-secondary)] mt-0.5">
+            Correlate runtime stack traces, compiler logs, and workspace diagnostics against indexed AST symbols.
           </p>
         </div>
 
-        <button
-          onClick={() => void handleCaptureLiveError()}
-          disabled={capturing}
-          className="flex items-center gap-2 px-3.5 py-2 text-[13px] font-medium bg-[#1C2030] hover:bg-[#262B3A] text-[#E6E9F2] border border-[#353B50] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
-        >
-          <Terminal className="w-3.5 h-3.5 text-[#F5B84B]" />
-          <span>{capturing ? 'Running Sandbox...' : 'Capture Live Failing Test'}</span>
-        </button>
-      </div>
-
-      {/* Input Panel */}
-      <section className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-4 space-y-3">
-        <label htmlFor="debug-stacktrace" className="block text-[13px] font-medium text-[#E6E9F2]">
-          Error Log or Stack Trace
-        </label>
-        <textarea
-          id="debug-stacktrace"
-          rows={6}
-          value={errorLog}
-          onChange={(e) => setErrorLog(e.target.value)}
-          placeholder="Paste stderr, stack trace, or failing test output..."
-          className="w-full bg-[#0F1117] border border-[#262B3A] focus:border-[#6C7BFF] rounded-[6px] p-3 font-mono text-[12px] text-[#E6E9F2] placeholder-[#6B728A] leading-relaxed outline-none"
-        />
-        <div className="flex items-center justify-between">
-          <span className="text-[12px] text-[#6B728A]">
-            Analyzes against indexed AST symbols and dependency graph before proposing a verified patch.
-          </span>
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => void onRunAnalysis(errorLog)}
-            disabled={analyzing || !errorLog.trim()}
-            className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] disabled:opacity-50 text-[#0D0F14] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
+            type="button"
+            onClick={handleLoadActiveProblems}
+            className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-strong)] bg-[var(--surface-elevated)] text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] inline-flex items-center gap-1.5"
           >
-            <Bug className="w-4 h-4" />
-            <span>{analyzing ? 'Analyzing Root Cause...' : 'Analyze Root Cause'}</span>
+            <AlertTriangle className="w-3.5 h-3.5 text-[var(--status-warning)]" />
+            Import Active Problems ({openFindings.length + diagnostics.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setErrorLog(SAMPLE_STACK_TRACE)}
+            className="h-8 px-3 text-xs font-medium rounded-[4px] border border-[var(--border-hairline)] bg-[var(--surface-elevated)] text-[var(--ink-secondary)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)]"
+          >
+            Load Sample Trace
           </button>
         </div>
-      </section>
+      </div>
 
-      {/* Root-Cause Analyses */}
-      <div className="space-y-4">
-        {safeAnalyses.length === 0 ? (
-          <div className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-8 text-center text-[#6B728A] text-[13px]">
-            No debug analyses recorded for this project yet. Click <span className="text-[#E6E9F2]">Analyze Root Cause</span> above to diagnose the active error.
+      {/* Input Form */}
+      <form
+        onSubmit={handleAnalyze}
+        className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)] p-4 space-y-3"
+      >
+        <div className="flex items-center justify-between">
+          <label htmlFor="debug-trace-input" className="text-xs font-semibold text-[var(--ink-primary)]">
+            Runtime Exception / Diagnostic Log
+          </label>
+          <span className="text-[11px] font-mono text-[var(--ink-muted)]">
+            Secret redaction runs before provider dispatch
+          </span>
+        </div>
+
+        <textarea
+          id="debug-trace-input"
+          value={errorLog}
+          onChange={(e) => setErrorLog(e.target.value)}
+          rows={6}
+          placeholder="Paste a Node.js/TypeScript stack trace, HTTP 500 error log, or diagnostic output..."
+          className="w-full p-3 text-xs font-mono rounded-[4px] bg-[var(--surface-canvas)] border border-[var(--border-hairline)] text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] focus:outline-none focus:border-[var(--accent-primary)] resize-y"
+        />
+
+        {errorMessage && (
+          <div className="text-xs text-[var(--status-danger)]">{errorMessage}</div>
+        )}
+
+        <div className="flex items-center justify-end">
+          <button
+            type="submit"
+            disabled={analyzing || !errorLog.trim()}
+            className="h-8 px-4 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5"
+          >
+            {analyzing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Search className="w-3.5 h-3.5" />}
+            Analyze Root Cause
+          </button>
+        </div>
+      </form>
+
+      {/* Recorded Analyses */}
+      <section className="space-y-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-[var(--ink-muted)]">
+          Analysis History ({analyses.length})
+        </h2>
+
+        {analyses.length === 0 ? (
+          <div className="p-8 text-center border border-dashed border-[var(--border-hairline)] rounded-[4px] text-xs text-[var(--ink-muted)]">
+            No diagnostic analyses recorded for this repository yet.
           </div>
         ) : (
-          safeAnalyses.map((item) => (
-            <article
-              key={item.id}
-              className="bg-[#151821] border border-[#262B3A] rounded-[10px] p-5 space-y-4"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <div className="text-[12px] text-[#A3AABF] font-mono">
-                    Confidence: <span className="text-[#3DD68C] uppercase">{item.confidence}</span> · {item.modelUsed} ·{' '}
-                    <span className="tabular-nums">{item.tokensUsed.toLocaleString()} tokens</span>
+          <div className="space-y-3">
+            {analyses.map((analysis) => (
+              <div
+                key={analysis.id}
+                className="border border-[var(--border-hairline)] rounded-[4px] bg-[var(--surface-elevated)] overflow-hidden"
+              >
+                <div className="px-4 py-3 border-b border-[var(--border-hairline)] flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <Bug className="w-4 h-4 text-[var(--status-danger)] shrink-0" />
+                      <h3 className="text-sm font-semibold text-[var(--ink-primary)]">
+                        {analysis.rootCause}
+                      </h3>
+                    </div>
+                    <div className="mt-1 text-[11px] font-mono text-[var(--ink-muted)]">
+                      Confidence: {analysis.confidence.toUpperCase()} · Model: {analysis.modelUsed} ·{' '}
+                      {new Date(analysis.createdAt).toLocaleString()}
+                    </div>
                   </div>
-                  <h2 className="text-[16px] font-semibold text-[#E6E9F2] mt-1">
-                    {item.rootCause}
-                  </h2>
+
+                  <button
+                    type="button"
+                    disabled={dispatchingId !== null}
+                    onClick={() => handleDispatchFix(analysis)}
+                    className="h-8 px-3 text-xs font-medium rounded-[4px] bg-[var(--accent-primary)] text-[var(--accent-ink)] hover:bg-[var(--accent-hover)] disabled:opacity-40 inline-flex items-center gap-1.5 shrink-0"
+                  >
+                    {dispatchingId === analysis.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Wrench className="w-3.5 h-3.5" />
+                    )}
+                    Dispatch Patch Task
+                  </button>
                 </div>
 
-                <button
-                  onClick={() => onDispatchToAgent(item.proposedPatchPrompt)}
-                  className="flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-semibold bg-[#6C7BFF] hover:bg-[#8793FF] text-[#0D0F14] rounded-[6px] transition-colors duration-120 whitespace-nowrap"
-                >
-                  <Wand2 className="w-3.5 h-3.5" />
-                  <span>Fix & Verify with Agent</span>
-                </button>
+                <div className="p-4 space-y-3">
+                  <p className="text-xs text-[var(--ink-secondary)] leading-relaxed whitespace-pre-wrap">
+                    {analysis.explanation}
+                  </p>
+
+                  {analysis.affectedFiles.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] text-[var(--ink-muted)]">Affected Symbols:</span>
+                      {analysis.affectedFiles.map((cit, i) => (
+                        <button
+                          key={`${cit.filePath}:${cit.startLine}:${i}`}
+                          type="button"
+                          onClick={() => onOpenCitation(cit)}
+                          className="px-2 py-1 text-[11px] font-mono rounded-[3px] border border-[var(--border-hairline)] bg-[var(--surface-canvas)] text-[var(--accent-primary)] hover:border-[var(--accent-primary)] inline-flex items-center gap-1"
+                        >
+                          <FileCode2 className="w-3 h-3" />
+                          {cit.filePath}:{cit.startLine}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-
-              <p className="text-[13px] text-[#E6E9F2] leading-relaxed whitespace-pre-wrap">
-                {item.explanation}
-              </p>
-
-              {item.affectedFiles.length > 0 && (
-                <div className="pt-3 border-t border-[#262B3A] space-y-2">
-                  <div className="text-[12px] font-medium text-[#A3AABF]">Implicated Source Locations</div>
-                  <div className="flex flex-wrap gap-3">
-                    {item.affectedFiles.map((loc, idx) => (
-                      <button
-                        key={`${loc.filePath}:${loc.startLine}:${idx}`}
-                        onClick={() => onOpenFileAtLine(loc.filePath, loc.startLine)}
-                        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[6px] bg-[#0F1117] hover:bg-[#1C2030] border border-[#262B3A] font-mono text-[12px] text-[#8793FF] transition-colors duration-120"
-                      >
-                        <Play className="w-3 h-3" />
-                        <span>
-                          {loc.filePath}:{loc.startLine} ({loc.symbolName})
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </article>
-          ))
+            ))}
+          </div>
         )}
-      </div>
+      </section>
     </div>
   );
 };

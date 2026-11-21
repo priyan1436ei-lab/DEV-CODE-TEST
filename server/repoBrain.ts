@@ -143,21 +143,6 @@ export function extractSymbols(file: RepoFile): CodeSymbol[] {
       return;
     }
 
-    const testMatch = trimmed.match(/^test\(\s*['"`]([^'"`]+)['"`]/);
-    if (testMatch) {
-      symbols.push({
-        id: `${file.path}:test:${lineNum}`,
-        filePath: file.path,
-        name: testMatch[1],
-        kind: 'test',
-        startLine: lineNum,
-        endLine: findBlockEnd(idx),
-        signature: `test('${testMatch[1]}')`,
-        exported: false,
-      });
-      return;
-    }
-
     const pyDefMatch = trimmed.match(/^(?:async\s+)?def\s+([A-Za-z0-9_]+)\s*\(/);
     if (pyDefMatch) {
       symbols.push({
@@ -206,7 +191,6 @@ function extractImports(file: RepoFile, allPaths: Set<string>): string[] {
 }
 
 function classifyLayer(filePath: string): GraphNode['layer'] {
-  if (filePath.includes('test')) return 'test';
   if (filePath.includes('route') || filePath.includes('webhook')) return 'route';
   if (filePath.includes('db/') || filePath.includes('repository')) return 'data';
   if (filePath.includes('config') || filePath.endsWith('.json') || filePath.endsWith('.md')) return 'config';
@@ -215,7 +199,7 @@ function classifyLayer(filePath: string): GraphNode['layer'] {
 }
 
 /**
- * Section 9: Code-Aware Chunking & Knowledge Graph Construction.
+ * Code-Aware Chunking & Knowledge Graph Construction.
  */
 export function indexRepository(
   projectId: string,
@@ -227,12 +211,19 @@ export function indexRepository(
   architecture: ArchitectureSummary;
 } {
   const startedAt = Date.now();
-  const files = rawFiles.filter((f) => !shouldExcludePath(f.path));
+  const seenFilePaths = new Set<string>();
+  const files: RepoFile[] = [];
+  for (const f of rawFiles) {
+    if (shouldExcludePath(f.path) || seenFilePaths.has(f.path)) continue;
+    seenFilePaths.add(f.path);
+    files.push(f);
+  }
   const allPaths = new Set(files.map((f) => f.path));
 
   const symbols: CodeSymbol[] = [];
   const chunks: CodeChunk[] = [];
   const edges: GraphEdge[] = [];
+  const seenEdgeIds = new Set<string>();
   const securityFindings = scanRepositorySecurity(projectId, files);
 
   const langCounts = new Map<string, number>();
@@ -249,11 +240,14 @@ export function indexRepository(
 
     const fileDeps = extractImports(file, allPaths);
     for (const dep of fileDeps) {
+      const edgeId = `${file.path}->${dep}`;
+      if (seenEdgeIds.has(edgeId)) continue;
+      seenEdgeIds.add(edgeId);
       edges.push({
-        id: `${file.path}->${dep}`,
+        id: edgeId,
         source: file.path,
         target: dep,
-        type: file.path.includes('test') ? 'TESTS' : 'IMPORTS',
+        type: 'IMPORTS',
       });
     }
 

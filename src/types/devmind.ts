@@ -35,7 +35,6 @@ export type TaskStatus =
   | 'planning'
   | 'awaiting_approval'
   | 'running'
-  | 'testing'
   | 'completed'
   | 'failed'
   | 'cancelled';
@@ -45,9 +44,10 @@ export type TaskPriority = 'high' | 'medium' | 'low';
 export type Severity = 'critical' | 'high' | 'medium' | 'low' | 'info';
 
 export type ScreenId =
-  | 'dashboard'
   | 'explorer'
+  | 'dashboard'
   | 'brain'
+  | 'extensions'
   | 'debugging'
   | 'security'
   | 'history'
@@ -58,7 +58,7 @@ export type PermissionLevel = 'allowed' | 'approval_required' | 'explicit_approv
 export interface PermissionPolicyRule {
   actionType: string;
   label: string;
-  category: 'filesystem' | 'execution' | 'git' | 'secrets';
+  category: 'filesystem' | 'execution' | 'git' | 'secrets' | 'extensions';
   level: PermissionLevel;
   description: string;
 }
@@ -78,7 +78,7 @@ export interface CodeSymbol {
   id: string;
   filePath: string;
   name: string;
-  kind: 'function' | 'class' | 'method' | 'interface' | 'const' | 'route' | 'test';
+  kind: 'function' | 'class' | 'method' | 'interface' | 'const' | 'route';
   startLine: number;
   endLine: number;
   signature: string;
@@ -103,7 +103,7 @@ export interface GraphNode {
   id: string;
   label: string;
   filePath: string;
-  layer: 'entry' | 'route' | 'service' | 'data' | 'config' | 'test';
+  layer: 'entry' | 'route' | 'service' | 'data' | 'config';
   symbolCount: number;
   lineCount: number;
   issueCount: number;
@@ -113,7 +113,7 @@ export interface GraphEdge {
   id: string;
   source: string;
   target: string;
-  type: 'IMPORTS' | 'CALLS' | 'TESTS' | 'USES' | 'DEFINES' | 'DEPENDS_ON';
+  type: 'IMPORTS' | 'CALLS' | 'USES' | 'DEFINES' | 'DEPENDS_ON';
 }
 
 export interface ArchitectureSummary {
@@ -157,7 +157,7 @@ export interface AgentStep {
   id: string;
   taskId: string;
   stepNumber: number;
-  agentType: 'planner' | 'repository' | 'policy' | 'coding' | 'sandbox' | 'debugging' | 'review' | 'security';
+  agentType: 'planner' | 'repository' | 'policy' | 'coding' | 'debugging' | 'review' | 'security';
   action: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'awaiting_approval' | 'skipped';
   inputSummary: string;
@@ -195,47 +195,6 @@ export interface ApprovalRequest {
   decidedBy?: string;
 }
 
-export interface TestCaseResult {
-  name: string;
-  status: 'pass' | 'fail' | 'skip';
-  durationMs: number;
-  errorMessage?: string;
-}
-
-export interface TestFileCoverage {
-  file: string;
-  linePercent: number;
-  branchPercent: number;
-  funcsPercent: number;
-  uncoveredLines: string;
-}
-
-export interface TestCoverageSummary {
-  linePercent: number;
-  branchPercent: number;
-  funcsPercent: number;
-  files: TestFileCoverage[];
-}
-
-export interface TestRun {
-  id: string;
-  projectId: string;
-  taskId?: string;
-  command: string;
-  sandboxId: string;
-  status: 'passed' | 'failed' | 'error';
-  exitCode: number;
-  passedCount: number;
-  failedCount: number;
-  totalCount: number;
-  durationMs: number;
-  stdout: string;
-  stderr: string;
-  cases: TestCaseResult[];
-  coverage?: TestCoverageSummary;
-  createdAt: string;
-}
-
 export interface RollbackSnapshot {
   id: string;
   taskId: string;
@@ -251,7 +210,7 @@ export interface AgentTask {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
-  executionMode: 'approval' | 'strict_sandbox';
+  executionMode: 'approval' | 'direct';
   modelProvider: string;
   modelName: string;
   estimatedCostUsd: number;
@@ -263,7 +222,6 @@ export interface AgentTask {
   steps: AgentStep[];
   changes: CodeChange[];
   approvals: ApprovalRequest[];
-  testRuns: TestRun[];
   rollbackSnapshot?: RollbackSnapshot;
   finalReport?: {
     summary: string;
@@ -303,11 +261,14 @@ export interface AuditLogEntry {
     | 'APPROVAL_REQUESTED'
     | 'APPROVAL_DECIDED'
     | 'FILES_MODIFIED'
-    | 'SANDBOX_EXECUTED'
     | 'ROLLBACK_EXECUTED'
     | 'SECRET_REDACTED'
     | 'SECURITY_SCAN'
-    | 'MODEL_CALL';
+    | 'MODEL_CALL'
+    | 'EXTENSION_INSTALLED'
+    | 'EXTENSION_UNINSTALLED'
+    | 'EXTENSION_TOGGLED'
+    | 'EXTENSION_COMMAND';
   resourceType: string;
   resourceId: string;
   summary: string;
@@ -382,4 +343,123 @@ export interface UsageLedger {
     costUsd: number;
     latencyMs: number;
   }>;
+}
+
+/* ============================================================================
+ * VS Code-Inspired Extension Architecture & Runtime Host Types
+ * ============================================================================ */
+
+export type ExtensionCategory =
+  | 'Formatters'
+  | 'Linters'
+  | 'Productivity'
+  | 'Security'
+  | 'Navigation'
+  | 'Runtime';
+
+export type ExtensionPermission =
+  | 'workspace.read'
+  | 'workspace.write'
+  | 'editor.diagnostics'
+  | 'ui.commands'
+  | 'ui.statusbar'
+  | 'events.subscribe'
+  | 'security.hooks';
+
+export type ExtensionLifecycleState =
+  | 'not_installed'
+  | 'installed'
+  | 'active'
+  | 'disabled'
+  | 'incompatible'
+  | 'error';
+
+export interface ExtensionCommandContribution {
+  id: string;
+  title: string;
+  category: string;
+  description: string;
+  requiresActiveFile?: boolean;
+  mutatesFile?: boolean;
+}
+
+export interface ExtensionStatusBarItem {
+  id: string;
+  extensionId: string;
+  text: string;
+  tooltip: string;
+  alignment: 'left' | 'right';
+  priority: number;
+  commandId?: string;
+}
+
+export interface ExtensionDiagnostic {
+  id: string;
+  extensionId: string;
+  source: string;
+  filePath: string;
+  line: number;
+  severity: 'error' | 'warning' | 'info';
+  code: string;
+  message: string;
+}
+
+export interface ExtensionRuntimeLog {
+  id: string;
+  timestamp: string;
+  extensionId: string;
+  level: 'info' | 'warn' | 'error';
+  event: string;
+  message: string;
+}
+
+export interface ExtensionManifest {
+  id: string;
+  name: string;
+  displayName: string;
+  publisher: string;
+  verifiedPublisher: boolean;
+  version: string;
+  description: string;
+  longDescription: string;
+  category: ExtensionCategory;
+  engines: {
+    devmind: string;
+  };
+  downloads: number;
+  rating: number;
+  repositoryUrl: string;
+  license: string;
+  permissions: ExtensionPermission[];
+  activationEvents: string[];
+  extensionDependencies: string[];
+  contributes: {
+    commands: ExtensionCommandContribution[];
+    statusBar?: boolean;
+    diagnostics?: boolean;
+  };
+}
+
+export interface ExtensionRecord {
+  manifest: ExtensionManifest;
+  installed: boolean;
+  enabled: boolean;
+  state: ExtensionLifecycleState;
+  compatible: boolean;
+  compatibilityNote: string;
+  installedAt?: string;
+  activatedAt?: string;
+  activationDurationMs?: number;
+  missingDependencies: string[];
+  dependents: string[];
+  lastError?: string;
+}
+
+export interface ExtensionHostSnapshot {
+  engineVersion: string;
+  extensions: ExtensionRecord[];
+  activeCommands: Array<ExtensionCommandContribution & { extensionId: string; extensionName: string }>;
+  statusBarItems: ExtensionStatusBarItem[];
+  diagnostics: ExtensionDiagnostic[];
+  runtimeLogs: ExtensionRuntimeLog[];
 }

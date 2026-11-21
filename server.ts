@@ -37,7 +37,7 @@ async function startServer() {
 
   // Health & Provider Presets
   app.get('/api/v1/health', (_req, res) => {
-    res.json({ ok: true, service: 'devmind-ai-byok-gateway', timestamp: new Date().toISOString() });
+    res.json({ ok: true, service: 'devmind-studio-core', timestamp: new Date().toISOString() });
   });
 
   app.get('/api/v1/providers', (_req, res) => {
@@ -88,21 +88,23 @@ async function startServer() {
     } catch (err) {
       res.status(400).json({
         ok: false,
-        error: err instanceof Error ? err.message : 'LLM connection test failed',
+        error: err instanceof Error ? err.message : 'Endpoint verification failed',
       });
     }
   });
 
   app.post('/api/v1/auth/login', (req, res) => {
     try {
-      const { displayName, email, provider, baseUrl, model, apiKey, sandboxOnly } = req.body ?? {};
+      const { displayName, email, provider, baseUrl, model, apiKey, localWorkspaceOnly } = req.body ?? {};
       const preset =
         LLM_PROVIDER_PRESETS.find((p) => p.id === provider) ?? LLM_PROVIDER_PRESETS[0];
 
-      const configured = !sandboxOnly && Boolean(String(baseUrl || preset.defaultBaseUrl).trim() && String(model || preset.defaultModel).trim());
+      const configured =
+        !localWorkspaceOnly &&
+        Boolean(String(baseUrl || preset.defaultBaseUrl).trim() && String(model || preset.defaultModel).trim());
       if (configured && preset.requiresKey && !String(apiKey || '').trim()) {
         return res.status(400).json({
-          error: `Please enter your ${preset.name} API key, or choose "Sandbox Mode".`,
+          error: `Please enter your ${preset.name} API key, or choose "Open Local Workspace".`,
         });
       }
 
@@ -119,7 +121,7 @@ async function startServer() {
       });
       res.status(201).json(created);
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Login failed' });
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Sign-in failed' });
     }
   });
 
@@ -146,7 +148,7 @@ async function startServer() {
       });
       res.json({ session });
     } catch (err) {
-      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update LLM configuration' });
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to update endpoint configuration' });
     }
   });
 
@@ -156,7 +158,7 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  // Require valid authenticated session for all workspace & AI API routes below
+  // Require valid authenticated session for all workspace API routes below
   const requireSession: express.RequestHandler = (req, res, next) => {
     const token = extractBearerToken(req);
     if (!store.getSessionByToken(token)) {
@@ -166,6 +168,7 @@ async function startServer() {
   };
 
   app.use('/api/v1/projects', requireSession);
+  app.use('/api/v1/extensions', requireSession);
   app.use('/api/v1/agent', requireSession);
   app.use('/api/v1/approvals', requireSession);
   app.use('/api/v1/policies', requireSession);
@@ -264,26 +267,85 @@ async function startServer() {
     }
   });
 
-  // Isolated Sandbox Test Runner with Real V8 Coverage
-  app.get('/api/v1/projects/:id/tests', (req, res) => {
+  // Extensions Marketplace & Runtime Host
+  app.get('/api/v1/extensions', (req, res) => {
     try {
-      store.getProject(req.params.id);
-      res.json({ testRuns: store.testRuns.get(req.params.id) ?? [] });
+      const projectId = req.query.projectId ? String(req.query.projectId) : undefined;
+      const snapshot = store.getExtensionsSnapshot(projectId);
+      res.json({ host: snapshot });
     } catch (err) {
-      res.status(404).json({ error: err instanceof Error ? err.message : 'Project not found' });
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Failed to load extensions' });
     }
   });
 
-  app.post('/api/v1/projects/:id/tests/run', async (req, res) => {
+  app.post('/api/v1/extensions/:id/install', (req, res) => {
     try {
-      const run = await store.executeSandboxTests(req.params.id);
-      res.json({ testRun: run });
+      const projectId = req.body?.projectId ? String(req.body.projectId) : undefined;
+      const result = store.installExtension(req.params.id, projectId);
+      res.json({ installedIds: result.installedIds, host: result.snapshot });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Sandbox run failed' });
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Extension installation failed' });
     }
   });
 
-  // Repository-Aware AI Chat (uses active session BYOK LLM)
+  app.post('/api/v1/extensions/:id/uninstall', (req, res) => {
+    try {
+      const cascade = Boolean(req.body?.cascade);
+      const projectId = req.body?.projectId ? String(req.body.projectId) : undefined;
+      const result = store.uninstallExtension(req.params.id, cascade, projectId);
+      res.json({ uninstalledIds: result.uninstalledIds, host: result.snapshot });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Extension uninstall failed' });
+    }
+  });
+
+  app.post('/api/v1/extensions/:id/toggle', (req, res) => {
+    try {
+      const enabled = Boolean(req.body?.enabled);
+      const projectId = req.body?.projectId ? String(req.body.projectId) : undefined;
+      const snapshot = store.toggleExtension(req.params.id, enabled, projectId);
+      res.json({ host: snapshot });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to toggle extension' });
+    }
+  });
+
+  app.post('/api/v1/extensions/:id/activate', (req, res) => {
+    try {
+      const projectId = req.body?.projectId ? String(req.body.projectId) : undefined;
+      const snapshot = store.activateExtension(req.params.id, projectId);
+      res.json({ host: snapshot });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to activate extension' });
+    }
+  });
+
+  app.post('/api/v1/extensions/commands/execute', (req, res) => {
+    try {
+      const { commandId, projectId, filePath } = req.body ?? {};
+      if (typeof commandId !== 'string' || typeof projectId !== 'string') {
+        return res.status(400).json({ error: 'commandId and projectId are required.' });
+      }
+      const result = store.executeExtensionCommand(
+        commandId,
+        projectId,
+        typeof filePath === 'string' ? filePath : undefined
+      );
+      res.json({
+        ok: result.ok,
+        extensionId: result.extensionId,
+        commandId: result.commandId,
+        message: result.message,
+        mutatedFilePath: result.mutatedFilePath,
+        project: result.project,
+        host: result.snapshot,
+      });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Command execution failed' });
+    }
+  });
+
+  // Repository-Aware Chat
   app.get('/api/v1/projects/:id/chat', (req, res) => {
     try {
       store.getProject(req.params.id);
@@ -303,11 +365,11 @@ async function startServer() {
       const reply = await store.repoChat(req.params.id, question, llmConfig);
       res.json({ reply, messages: store.chatHistories.get(req.params.id) ?? [] });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'AI chat failed' });
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Repository chat failed' });
     }
   });
 
-  // Debugging Center (uses active session BYOK LLM)
+  // Debugging Center
   app.get('/api/v1/projects/:id/debug', (req, res) => {
     try {
       store.getProject(req.params.id);
@@ -331,7 +393,7 @@ async function startServer() {
     }
   });
 
-  // Autonomous Agent Tasks & Approvals (uses active session BYOK LLM)
+  // Engineering Tasks & Approvals
   app.get('/api/v1/agent/tasks', (req, res) => {
     const projectId = req.query.projectId ? String(req.query.projectId) : undefined;
     const priorityFilter = req.query.priority ? String(req.query.priority) : undefined;
@@ -359,14 +421,14 @@ async function startServer() {
           projectId,
           title: title || description.slice(0, 60),
           description,
-          executionMode: executionMode === 'strict_sandbox' ? 'strict_sandbox' : 'approval',
+          executionMode: executionMode === 'direct' ? 'direct' : 'approval',
           priority: validPriority,
         },
         llmConfig
       );
       res.status(201).json({ task, project: store.getProject(projectId) });
     } catch (err) {
-      res.status(500).json({ error: err instanceof Error ? err.message : 'Agent task failed' });
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Task failed' });
     }
   });
 
@@ -386,8 +448,7 @@ async function startServer() {
   app.post('/api/v1/approvals/:id/decision', async (req, res) => {
     try {
       const decision = req.body?.decision === 'reject' ? 'reject' : 'approve';
-      const llmConfig = getSessionLlmConfig(req);
-      const task = await store.decideApproval(req.params.id, decision, llmConfig);
+      const task = await store.decideApproval(req.params.id, decision);
       const project = store.getProject(task.projectId);
       const securityFindings = store.getSecurityFindings(task.projectId);
       res.json({ task, project, securityFindings });
@@ -416,7 +477,7 @@ async function startServer() {
     }
   });
 
-  // Policy Engine, Billing/Usage & Immutable Audit Logs
+  // Policy Engine, Usage & Audit Logs
   app.get('/api/v1/policies', (_req, res) => {
     res.json({ policies: store.policies, presets: LLM_PROVIDER_PRESETS });
   });
@@ -459,12 +520,11 @@ async function startServer() {
     res.json({ auditLogs: store.auditLogs });
   });
 
-  // Explicit 404 JSON guard so /api/* never falls through to Vite HTML!
+  // Explicit 404 JSON guard so /api/* never falls through to Vite HTML
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: 'API endpoint not found.' });
   });
 
-  // Mount Vite middleware in dev, or serve built dist/ in production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -480,7 +540,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`DevMind AI listening on http://0.0.0.0:${PORT}`);
+    console.log(`DevMind Studio listening on http://0.0.0.0:${PORT}`);
   });
 }
 
