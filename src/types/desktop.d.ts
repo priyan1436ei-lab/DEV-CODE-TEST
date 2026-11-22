@@ -39,6 +39,16 @@ export interface DevMindDesktopBridge {
   isNetworkOnline?: () => Promise<boolean>;
   onNetworkStatusChanged?: (callback: (isOnline: boolean) => void) => () => void;
   getDiagnostics?: () => Promise<DevMindDesktopDiagnostics>;
+  // Desktop System-Browser Google OAuth 2.0 + PKCE (bypasses auth/unauthorized-domain)
+  signInWithGooglePkce?: (options?: { clientId?: string }) => Promise<{
+    idToken: string;
+    accessToken?: string;
+  }>;
+  getDesktopOAuthStatus?: () => Promise<{
+    pkceConfigured: boolean;
+    windowOrigin: string;
+    callbackStrategy: string;
+  }>;
 }
 
 declare global {

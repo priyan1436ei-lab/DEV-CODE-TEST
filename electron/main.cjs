@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog, ipcMain, net: electronNet, safeStorage, shell } = require('electron');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const http = require('node:http');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
@@ -269,6 +270,7 @@ function isAllowedAuthPopupUrl(rawUrl) {
       host === 'localhost' ||
       host === 'accounts.google.com' ||
       host === 'apis.google.com' ||
+      host === 'github.com' ||
       host.endsWith('.firebaseapp.com') ||
       host.endsWith('.web.app') ||
       host.endsWith('.googleusercontent.com') ||
@@ -279,9 +281,168 @@ function isAllowedAuthPopupUrl(rawUrl) {
   }
 }
 
+function base64UrlEncode(buffer) {
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+/**
+ * RFC 8252 Desktop OAuth 2.0 + PKCE via the user's System Browser and ephemeral loopback callback.
+ * Exchanges the authorization code directly with Google's token endpoint and returns { idToken, accessToken }
+ * so the renderer can authenticate Firebase using signInWithCredential() without auth/unauthorized-domain.
+ */
+async function runGoogleSystemBrowserPkceFlow(options = {}) {
+  const clientId = String(
+    options.clientId || process.env.GOOGLE_DESKTOP_OAUTH_CLIENT_ID || ''
+  ).trim();
+  const clientSecret = String(process.env.GOOGLE_DESKTOP_OAUTH_CLIENT_SECRET || '').trim();
+
+  if (!clientId) {
+    throw new Error(
+      'DESKTOP_PKCE_UNCONFIGURED: Set GOOGLE_DESKTOP_OAUTH_CLIENT_ID for external system-browser PKCE sign-in.'
+    );
+  }
+
+  const codeVerifier = base64UrlEncode(crypto.randomBytes(32));
+  const codeChallenge = base64UrlEncode(
+    crypto.createHash('sha256').update(codeVerifier).digest()
+  );
+  const expectedState = crypto.randomBytes(24).toString('hex');
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutId);
+      try {
+        callbackServer.close();
+      } catch {
+        // ignore close errors
+      }
+      fn(value);
+    };
+
+    const callbackServer = http.createServer(async (req, res) => {
+      try {
+        const reqUrl = new URL(req.url || '/', 'http://127.0.0.1');
+        if (reqUrl.pathname !== '/oauth2callback') {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('Not found');
+          return;
+        }
+
+        const errorParam = reqUrl.searchParams.get('error');
+        const code = reqUrl.searchParams.get('code');
+        const state = reqUrl.searchParams.get('state') || '';
+
+        if (errorParam) {
+          res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<html><body style="font-family:system-ui;padding:32px;background:#1c1c1e;color:#f5f5f7"><h2>Sign-In Cancelled</h2><p>You can close this browser tab and return to DevMind Studio.</p></body></html>');
+          finish(reject, new Error(`Google Sign-In was cancelled or denied (${errorParam}).`));
+          return;
+        }
+
+        const expectedBuf = Buffer.from(expectedState, 'utf8');
+        const receivedBuf = Buffer.from(state, 'utf8');
+        if (
+          !code ||
+          expectedBuf.length !== receivedBuf.length ||
+          !crypto.timingSafeEqual(expectedBuf, receivedBuf)
+        ) {
+          res.writeHead(400, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<html><body style="font-family:system-ui;padding:32px;background:#1c1c1e;color:#f5f5f7"><h2>Invalid Sign-In State</h2><p>State verification failed. Please retry from DevMind Studio.</p></body></html>');
+          finish(reject, new Error('OAuth state verification failed.'));
+          return;
+        }
+
+        const addr = callbackServer.address();
+        const redirectUri = `http://127.0.0.1:${addr.port}/oauth2callback`;
+
+        const tokenParams = new URLSearchParams({
+          client_id: clientId,
+          code,
+          code_verifier: codeVerifier,
+          grant_type: 'authorization_code',
+          redirect_uri: redirectUri,
+        });
+        if (clientSecret) {
+          tokenParams.set('client_secret', clientSecret);
+        }
+
+        const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: tokenParams.toString(),
+        });
+
+        const tokenJson = await tokenRes.json().catch(() => ({}));
+        if (!tokenRes.ok || !tokenJson.id_token) {
+          const detail = tokenJson.error_description || tokenJson.error || `HTTP ${tokenRes.status}`;
+          res.writeHead(500, { 'Content-Type': 'text/html; charset=utf-8' });
+          res.end('<html><body style="font-family:system-ui;padding:32px;background:#1c1c1e;color:#f5f5f7"><h2>Authentication Error</h2><p>Token exchange did not return a Google ID token. Return to DevMind Studio for details.</p></body></html>');
+          logStartup(`Desktop Google PKCE token exchange failed: ${detail}`);
+          finish(reject, new Error(`Google OAuth token exchange failed: ${detail}`));
+          return;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end('<html><body style="font-family:system-ui;padding:32px;background:#1c1c1e;color:#f5f5f7"><h2>Signed in to DevMind Studio</h2><p>Authentication succeeded. You can close this browser tab and return to DevMind Studio.</p></body></html>');
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.focus();
+        }
+        logStartup('Desktop Google PKCE sign-in succeeded; exchanging ID token with Firebase signInWithCredential().');
+        finish(resolve, {
+          idToken: String(tokenJson.id_token),
+          accessToken: tokenJson.access_token ? String(tokenJson.access_token) : undefined,
+        });
+      } catch (err) {
+        logStartup('Unexpected error in desktop Google PKCE callback', err);
+        finish(reject, err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+
+    const timeoutId = setTimeout(() => {
+      finish(reject, new Error('Google Sign-In timed out after 3 minutes. Please try again.'));
+    }, 180_000);
+
+    callbackServer.on('error', (err) => {
+      finish(reject, new Error(`Failed to start local OAuth callback listener: ${err.message}`));
+    });
+
+    callbackServer.listen(0, '127.0.0.1', () => {
+      const addr = callbackServer.address();
+      const redirectUri = `http://127.0.0.1:${addr.port}/oauth2callback`;
+      const authParams = new URLSearchParams({
+        client_id: clientId,
+        redirect_uri: redirectUri,
+        response_type: 'code',
+        scope: 'openid email profile',
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256',
+        state: expectedState,
+        prompt: 'select_account',
+      });
+
+      const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${authParams.toString()}`;
+      logStartup(`Opening system browser for Google OAuth PKCE (loopback port ${addr.port})`);
+      shell.openExternal(authUrl).catch((err) => {
+        finish(reject, new Error(`Could not open system browser for Google Sign-In: ${err.message}`));
+      });
+    });
+  });
+}
+
 async function createWindow() {
   const port = await startEmbeddedBackend();
-  const baseUrl = `http://127.0.0.1:${port}`;
+  // Use http://localhost:<port> instead of http://127.0.0.1:<port> or file://
+  // because Firebase Auth authorizes "localhost" by default (preventing auth/unauthorized-domain).
+  const baseUrl = `http://localhost:${port}`;
 
   const state = loadWindowState();
   const iconPath = getAppIconPath();
@@ -447,16 +608,31 @@ ipcMain.handle('vault:delete', (_event, key) => {
   return true;
 });
 
-// Network Connectivity & Desktop Diagnostics
+// Network Connectivity, Desktop OAuth PKCE & Diagnostics
 ipcMain.handle('network:is-online', () => checkElectronOnline());
 
+ipcMain.handle('auth:google-pkce', async (_event, options) => {
+  return runGoogleSystemBrowserPkceFlow(options || {});
+});
+
+ipcMain.handle('auth:get-desktop-oauth-status', () => ({
+  pkceConfigured: Boolean(String(process.env.GOOGLE_DESKTOP_OAUTH_CLIENT_ID || '').trim()),
+  windowOrigin: backendPort ? `http://localhost:${backendPort}` : 'http://localhost',
+  callbackStrategy: String(process.env.GOOGLE_DESKTOP_OAUTH_CLIENT_ID || '').trim()
+    ? 'system-browser-pkce'
+    : 'localhost-firebase-popup',
+}));
+
 ipcMain.handle('diagnostics:get-info', () => ({
+  userDataPath: app.getPath('userData'),
   userDataDir: app.getPath('userData'),
   dataDir: backendDataDir || path.join(app.getPath('userData'), 'data'),
   startupLogPath: getStartupLogFile(),
   backendPort: backendPort || 0,
+  vaultAvailable: isVaultAvailable(),
   safeStorageAvailable: isVaultAvailable(),
   isPackaged: app.isPackaged,
+  recentLogs: [],
 }));
 
 app.on('second-instance', () => {

@@ -6,6 +6,10 @@ import type {
   ChatMessage,
   DebugAnalysis,
   ExtensionHostSnapshot,
+  GitHubAccountStatus,
+  GitHubCommitInfo,
+  GitHubRemoteConfig,
+  GitHubSyncResult,
   LlmProviderId,
   LocalAiConfig,
   LocalProfile,
@@ -810,5 +814,76 @@ export const devmindApi = {
       }
       throw err;
     }
+  },
+
+  // GitHub Integration (OAuth / PAT, Link Remote, Pull, Granular Staged Push)
+  getGitHubStatus: () => request<{ status: GitHubAccountStatus }>('/api/v1/github/status'),
+
+  getGitHubOAuthUrl: (origin?: string) =>
+    request<{ url: string }>(
+      origin
+        ? `/api/v1/github/oauth/url?origin=${encodeURIComponent(origin)}`
+        : '/api/v1/github/oauth/url'
+    ),
+
+  connectGitHubToken: (accessToken: string) =>
+    request<{ status: GitHubAccountStatus }>('/api/v1/github/token', {
+      method: 'POST',
+      body: JSON.stringify({ accessToken }),
+    }),
+
+  disconnectGitHub: () =>
+    request<{ status: GitHubAccountStatus }>('/api/v1/github/token', { method: 'DELETE' }),
+
+  linkGitHubRepo: async (projectId: string, body: { repo: string; branch?: string }) => {
+    const res = await request<{
+      project: Project;
+      remote: GitHubRemoteConfig;
+      commits: GitHubCommitInfo[];
+    }>(`/api/v1/projects/${projectId}/github/link`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    void cacheSingleProject(res.project);
+    return res;
+  },
+
+  unlinkGitHubRepo: async (projectId: string) => {
+    const res = await request<{ project: Project }>(`/api/v1/projects/${projectId}/github/link`, {
+      method: 'DELETE',
+    });
+    void cacheSingleProject(res.project);
+    return res;
+  },
+
+  listGitHubCommits: (projectId: string) =>
+    request<{ commits: GitHubCommitInfo[] }>(`/api/v1/projects/${projectId}/github/commits`),
+
+  pullGitHubRepo: async (projectId: string) => {
+    const res = await request<{
+      project: Project;
+      result: GitHubSyncResult;
+      commits: GitHubCommitInfo[];
+    }>(`/api/v1/projects/${projectId}/github/pull`, {
+      method: 'POST',
+    });
+    void cacheSingleProject(res.project);
+    return res;
+  },
+
+  pushStagedGitHubFiles: async (
+    projectId: string,
+    body: { stagedPaths: string[]; commitMessage: string }
+  ) => {
+    const res = await request<{
+      project: Project;
+      result: GitHubSyncResult;
+      commits: GitHubCommitInfo[];
+    }>(`/api/v1/projects/${projectId}/github/push`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    void cacheSingleProject(res.project);
+    return res;
   },
 };

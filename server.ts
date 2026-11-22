@@ -3,6 +3,7 @@ import express from 'express';
 import type http from 'node:http';
 import path from 'node:path';
 import { store, type RealtimeSyncEvent } from './server/agentOrchestrator.ts';
+import { githubService } from './server/githubIntegration.ts';
 import { LLM_PROVIDER_PRESETS } from './server/modelGateway.ts';
 import { hybridSearchRepository } from './server/repoBrain.ts';
 import type { AiRoutingMode, LlmProviderId, TaskPriority } from './src/types/devmind.ts';
@@ -761,6 +762,245 @@ export async function startServer(
 
   app.get('/api/v1/audit', (_req, res) => {
     res.json({ auditLogs: store.auditLogs });
+  });
+
+  // GitHub Integration: OAuth popup callback (returns minimal HTML postMessage snippet)
+  const handleGitHubOAuthCallback = async (req: express.Request, res: express.Response) => {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    const errorParam = typeof req.query.error === 'string' ? req.query.error : '';
+
+    if (errorParam || !code || !state) {
+      const msg = errorParam || 'Missing authorization code or state.';
+      return res.status(400).send(`
+        <html><body style="font-family:system-ui;padding:24px;background:#1c1c1e;color:#f5f5f7">
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'GITHUB_OAUTH_ERROR', error: ${JSON.stringify(msg)} }, '*');
+              window.close();
+            }
+          </script>
+          <p>GitHub sign-in was cancelled. You may close this window.</p>
+        </body></html>
+      `);
+    }
+
+    try {
+      const status = await githubService.completeOAuthCallback(code, state);
+      return res.send(`
+        <html><body style="font-family:system-ui;padding:24px;background:#1c1c1e;color:#f5f5f7">
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'GITHUB_OAUTH_SUCCESS', username: ${JSON.stringify(status.username || '')} }, '*');
+              window.close();
+            } else {
+              window.location.href = '/';
+            }
+          </script>
+          <p>GitHub connected. This window should close automatically.</p>
+        </body></html>
+      `);
+    } catch (err) {
+      const errText = err instanceof Error ? err.message : 'GitHub OAuth failed';
+      return res.status(400).send(`
+        <html><body style="font-family:system-ui;padding:24px;background:#1c1c1e;color:#f5f5f7">
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'GITHUB_OAUTH_ERROR', error: ${JSON.stringify(errText)} }, '*');
+              window.close();
+            }
+          </script>
+          <p>GitHub authentication error. You may close this window.</p>
+        </body></html>
+      `);
+    }
+  };
+
+  app.get(['/auth/github/callback', '/auth/github/callback/'], handleGitHubOAuthCallback);
+
+  // GitHub Account Status, OAuth URL & Personal Access Token Connection (session-scoped, never persisted in plaintext)
+  app.get('/api/v1/github/status', (req, res) => {
+    const token = extractBearerToken(req);
+    if (!token || !store.getSessionByToken(token)) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    res.json({ status: githubService.getAccountStatus(token) });
+  });
+
+  app.get('/api/v1/github/oauth/url', (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const originFallback =
+        typeof req.query.origin === 'string' && /^https?:\/\//.test(req.query.origin)
+          ? req.query.origin
+          : undefined;
+      const url = githubService.createOAuthAuthorizeUrl(token, originFallback);
+      res.json({ url });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'GitHub OAuth unavailable' });
+    }
+  });
+
+  app.post('/api/v1/github/token', async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const accessToken = String(req.body?.accessToken || '');
+      const status = await githubService.connectWithToken(token, accessToken);
+      res.json({ status });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to verify GitHub token' });
+    }
+  });
+
+  app.delete('/api/v1/github/token', (req, res) => {
+    const token = extractBearerToken(req);
+    if (!token || !store.getSessionByToken(token)) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    githubService.clearSessionAuth(token);
+    res.json({ status: githubService.getAccountStatus(token) });
+  });
+
+  // Project-Scoped GitHub Remote Link, Commits, Pull & Granular Staged Push
+  app.post('/api/v1/projects/:id/github/link', async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const repoInput = String(req.body?.repo || req.body?.remoteUrl || '');
+      const branch = typeof req.body?.branch === 'string' ? req.body.branch : undefined;
+      const ghToken = githubService.getSessionAccessToken(token);
+
+      const { remote, commits } = await githubService.linkRepository(repoInput, branch, ghToken);
+      const project = store.setProjectGitHubRemote(req.params.id, remote);
+      res.json({ project, remote, commits });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to link GitHub repository' });
+    }
+  });
+
+  app.delete('/api/v1/projects/:id/github/link', (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const project = store.setProjectGitHubRemote(req.params.id, undefined);
+      res.json({ project });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to unlink GitHub repository' });
+    }
+  });
+
+  app.get('/api/v1/projects/:id/github/commits', async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const project = store.getProject(req.params.id);
+      if (!project.githubRemote?.connected) {
+        return res.json({ commits: [] });
+      }
+      const ghToken = githubService.getSessionAccessToken(token);
+      const commits = await githubService.listCommits(
+        project.githubRemote.owner,
+        project.githubRemote.repo,
+        project.githubRemote.branch,
+        ghToken
+      );
+      res.json({ commits });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'Failed to fetch commits' });
+    }
+  });
+
+  app.post('/api/v1/projects/:id/github/pull', async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const project = store.getProject(req.params.id);
+      if (!project.githubRemote?.connected) {
+        return res.status(400).json({ error: 'Link a GitHub repository before pulling.' });
+      }
+      const ghToken = githubService.getSessionAccessToken(token);
+      const pulled = await githubService.pullFromRemote(project.githubRemote, ghToken);
+      const updatedProject = store.applyGitHubPull(
+        project.id,
+        pulled.files,
+        pulled.commitSha,
+        pulled.commitMessage
+      );
+      const commits = await githubService
+        .listCommits(
+          project.githubRemote.owner,
+          project.githubRemote.repo,
+          project.githubRemote.branch,
+          ghToken
+        )
+        .catch(() => []);
+      res.json({ project: updatedProject, result: pulled.result, commits });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'GitHub pull failed' });
+    }
+  });
+
+  app.post('/api/v1/projects/:id/github/push', async (req, res) => {
+    try {
+      const token = extractBearerToken(req);
+      if (!token || !store.getSessionByToken(token)) {
+        return res.status(401).json({ error: 'Not authenticated' });
+      }
+      const project = store.getProject(req.params.id);
+      const ghToken = githubService.getSessionAccessToken(token);
+      if (!ghToken) {
+        return res.status(401).json({
+          error: 'Connect your GitHub account or Personal Access Token before pushing commits.',
+        });
+      }
+
+      const stagedPaths = Array.isArray(req.body?.stagedPaths)
+        ? req.body.stagedPaths.map((p: unknown) => String(p))
+        : [];
+      const commitMessage = String(req.body?.commitMessage || '');
+
+      const result = await githubService.pushStagedFiles(project, {
+        stagedPaths,
+        commitMessage,
+        accessToken: ghToken,
+      });
+
+      const updatedProject = store.markGitHubFilesPushed(
+        project.id,
+        result.pushedFiles || stagedPaths,
+        result.commitSha || '',
+        commitMessage
+      );
+
+      const commits = project.githubRemote
+        ? await githubService
+            .listCommits(
+              project.githubRemote.owner,
+              project.githubRemote.repo,
+              project.githubRemote.branch,
+              ghToken
+            )
+            .catch(() => [])
+        : [];
+
+      res.json({ project: updatedProject, result, commits });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : 'GitHub push failed' });
+    }
   });
 
   // Explicit 404 JSON guard so /api/* never falls through to Vite HTML

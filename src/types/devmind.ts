@@ -53,13 +53,54 @@ export interface SyncConflictRecord {
   id: string;
   entityType: 'project' | 'task' | 'extension' | 'profile';
   entityId: string;
-  entityLabel: string;
+  title: string;
   localUpdatedAt: string;
   cloudUpdatedAt: string;
-  localSummary: Record<string, unknown>;
-  cloudSummary: Record<string, unknown>;
+  localSummary: string;
+  cloudSummary: string;
+  localSnapshot: Record<string, unknown>;
+  cloudSnapshot: Record<string, unknown>;
   mutationId?: number;
   detectedAt: string;
+}
+
+export interface GitHubRemoteConfig {
+  owner: string;
+  repo: string;
+  branch: string;
+  remoteUrl: string;
+  connected: boolean;
+  lastSyncedAt?: string;
+  lastCommitSha?: string;
+  lastCommitMessage?: string;
+  lastSyncDirection?: 'push' | 'pull' | 'linked';
+}
+
+export interface GitHubCommitInfo {
+  sha: string;
+  shortSha: string;
+  message: string;
+  author: string;
+  date: string;
+  url: string;
+}
+
+export interface GitHubAccountStatus {
+  connected: boolean;
+  username?: string;
+  avatarUrl?: string;
+  oauthConfigured: boolean;
+  scopes?: string[];
+}
+
+export interface GitHubSyncResult {
+  ok: boolean;
+  commitSha?: string;
+  commitUrl?: string;
+  branch: string;
+  pushedFiles?: string[];
+  pulledFiles?: string[];
+  message: string;
 }
 
 export interface UserLlmConfig {
@@ -107,6 +148,7 @@ export type ScreenId =
   | 'explorer'
   | 'dashboard'
   | 'brain'
+  | 'github'
   | 'extensions'
   | 'debugging'
   | 'security'
@@ -200,6 +242,7 @@ export interface Project {
   description: string;
   localPath: string;
   remoteUrl?: string;
+  githubRemote?: GitHubRemoteConfig;
   defaultBranch: string;
   primaryLanguage: string;
   framework: string;
@@ -329,7 +372,10 @@ export interface AuditLogEntry {
     | 'EXTENSION_INSTALLED'
     | 'EXTENSION_UNINSTALLED'
     | 'EXTENSION_TOGGLED'
-    | 'EXTENSION_COMMAND';
+    | 'EXTENSION_COMMAND'
+    | 'GITHUB_LINKED'
+    | 'GITHUB_PUSHED'
+    | 'GITHUB_PULLED';
   resourceType: string;
   resourceId: string;
   summary: string;

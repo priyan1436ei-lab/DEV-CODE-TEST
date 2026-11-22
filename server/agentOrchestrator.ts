@@ -15,6 +15,7 @@ import type {
   CodeCitation,
   DebugAnalysis,
   ExtensionHostSnapshot,
+  GitHubRemoteConfig,
   LocalAiConfig,
   PermissionPolicyRule,
   Project,
@@ -654,6 +655,99 @@ export class DevMindStore {
       summary: `Deleted file "${cleanPath}" from ${project.name}.`,
     });
     return this.reindexProject(projectId);
+  }
+
+  public setProjectGitHubRemote(projectId: string, remote?: GitHubRemoteConfig): Project {
+    const project = this.getProject(projectId);
+    project.githubRemote = remote;
+    if (remote) {
+      project.remoteUrl = remote.remoteUrl;
+      project.defaultBranch = remote.branch;
+    }
+    project.updatedAt = new Date().toISOString();
+    this.logAudit({
+      actor: 'developer',
+      eventType: 'GITHUB_LINKED',
+      resourceType: 'project',
+      resourceId: project.id,
+      summary: remote
+        ? `Linked GitHub remote ${remote.owner}/${remote.repo} (${remote.branch}) to ${project.name}.`
+        : `Unlinked GitHub remote from ${project.name}.`,
+    });
+    this.emitSync('project_updated', project.id);
+    return project;
+  }
+
+  public applyGitHubPull(
+    projectId: string,
+    pulledFiles: Array<{ path: string; content: string }>,
+    commitSha: string,
+    commitMessage: string
+  ): Project {
+    const project = this.getProject(projectId);
+    const byPath = new Map(project.files.map((f) => [f.path, f]));
+
+    for (const incoming of pulledFiles) {
+      const cleanPath = this.sanitizeWorkspacePath(incoming.path);
+      byPath.set(cleanPath, buildRepoFile(cleanPath, incoming.content, 'clean'));
+    }
+
+    project.files = Array.from(byPath.values());
+    if (project.githubRemote) {
+      project.githubRemote = {
+        ...project.githubRemote,
+        lastSyncedAt: new Date().toISOString(),
+        lastCommitSha: commitSha,
+        lastCommitMessage: commitMessage,
+        lastSyncDirection: 'pull',
+      };
+    }
+
+    this.logAudit({
+      actor: 'developer',
+      eventType: 'GITHUB_PULLED',
+      resourceType: 'project',
+      resourceId: project.id,
+      summary: `Pulled ${pulledFiles.length} file(s) from GitHub (${commitSha.slice(0, 7)}) into ${project.name}.`,
+    });
+    return this.reindexProject(projectId);
+  }
+
+  public markGitHubFilesPushed(
+    projectId: string,
+    pushedPaths: string[],
+    commitSha: string,
+    commitMessage: string
+  ): Project {
+    const project = this.getProject(projectId);
+    const pushedSet = new Set(pushedPaths);
+
+    project.files = project.files.map((file) =>
+      pushedSet.has(file.path)
+        ? { ...file, gitStatus: 'clean', syncStatus: 'synced' }
+        : file
+    );
+
+    if (project.githubRemote) {
+      project.githubRemote = {
+        ...project.githubRemote,
+        lastSyncedAt: new Date().toISOString(),
+        lastCommitSha: commitSha,
+        lastCommitMessage: commitMessage,
+        lastSyncDirection: 'push',
+      };
+    }
+    project.updatedAt = new Date().toISOString();
+
+    this.logAudit({
+      actor: 'developer',
+      eventType: 'GITHUB_PUSHED',
+      resourceType: 'project',
+      resourceId: project.id,
+      summary: `Pushed ${pushedPaths.length} staged file(s) to GitHub (${commitSha.slice(0, 7)}): ${commitMessage.slice(0, 120)}`,
+    });
+    this.emitSync('project_updated', project.id);
+    return project;
   }
 
   public deleteProject(projectId: string): void {

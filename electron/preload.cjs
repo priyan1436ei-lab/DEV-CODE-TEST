@@ -27,4 +27,6 @@ contextBridge.exposeInMainWorld('devmindDesktop', {
     return () => ipcRenderer.removeListener('network:status-changed', handler);
   },
   getDiagnostics: () => ipcRenderer.invoke('diagnostics:get-info'),
+  signInWithGooglePkce: (options) => ipcRenderer.invoke('auth:google-pkce', options),
+  getDesktopOAuthStatus: () => ipcRenderer.invoke('auth:get-desktop-oauth-status'),
 });
