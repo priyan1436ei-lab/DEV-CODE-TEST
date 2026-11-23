@@ -1,6 +1,6 @@
 {
   "name": "DevMind AI",
-  "description": "Autonomous AI software engineering platform with repository intelligence, approval-gated multi-file coding, and sandboxed test verification.",
+  "description": "Windows-optimized desktop software engineering studio with VS Code-style Extensions Marketplace, live synced code editor, AST repository architecture graph, BYOK model gateway, and policy-gated code review.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

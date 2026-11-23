@@ -1,184 +1,198 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Code2, Command, FileCode2, Play, Search } from 'lucide-react';
-import type { Project, ScreenId } from '../types/devmind';
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Blocks,
+  Code2,
+  Compass,
+  FileCode2,
+  Play,
+  Search,
+  X,
+} from 'lucide-react';
+import type { ExtensionCommandContribution, Project, ScreenId } from '../types/devmind';
 
 interface CommandPaletteProps {
   open: boolean;
-  project: Project;
+  project: Project | null;
+  activeFilePath: string | null;
+  activeCommands: Array<ExtensionCommandContribution & { extensionId: string; extensionName: string }>;
   onClose: () => void;
-  onOpenFileAtLine: (filePath: string, line?: number) => void;
   onNavigate: (screen: ScreenId) => void;
-  onRunSandboxTests: () => Promise<void>;
-  onLaunchMilestoneDemo: () => void;
-  onToggleRightPanel: () => void;
+  onOpenFile: (filePath: string, line?: number) => void;
+  onRunExtensionCommand: (commandId: string, filePath?: string) => Promise<void>;
+  onReindex: () => void;
 }
 
 interface PaletteItem {
   id: string;
+  group: 'Extension Command' | 'Navigation' | 'File' | 'Symbol';
   label: string;
-  sublabel: string;
-  kind: 'action' | 'screen' | 'file' | 'symbol';
-  run: () => void;
+  detail: string;
+  action: () => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
   open,
   project,
+  activeFilePath,
+  activeCommands,
   onClose,
-  onOpenFileAtLine,
   onNavigate,
-  onRunSandboxTests,
-  onLaunchMilestoneDemo,
-  onToggleRightPanel,
+  onOpenFile,
+  onRunExtensionCommand,
+  onReindex,
 }) => {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     if (open) {
       setQuery('');
       setSelectedIndex(0);
-      setTimeout(() => inputRef.current?.focus(), 20);
     }
   }, [open]);
 
   const items = useMemo<PaletteItem[]>(() => {
-    const base: PaletteItem[] = [
+    const list: PaletteItem[] = [
+      ...activeCommands.map((cmd) => ({
+        id: `extcmd:${cmd.id}`,
+        group: 'Extension Command' as const,
+        label: `${cmd.category}: ${cmd.title}`,
+        detail: `${cmd.extensionName}${cmd.requiresActiveFile && !activeFilePath ? ' (open file first)' : ''}`,
+        action: () => {
+          onRunExtensionCommand(cmd.id, activeFilePath || undefined);
+          onClose();
+        },
+      })),
       {
-        id: 'act-demo',
-        label: 'Run Autonomous Security Fix & Verify',
-        sublabel: 'Autonomous Agent · Milestone End-to-End Task',
-        kind: 'action',
-        run: () => {
-          onLaunchMilestoneDemo();
+        id: 'nav:explorer',
+        group: 'Navigation',
+        label: 'View: Code Editor',
+        detail: 'Switch to source editor & explorer',
+        action: () => {
+          onNavigate('explorer');
           onClose();
         },
       },
       {
-        id: 'act-tests',
-        label: 'Run Sandbox Test Suite',
-        sublabel: 'Execute node --test inside isolated disposable sandbox',
-        kind: 'action',
-        run: () => {
-          void onRunSandboxTests();
+        id: 'nav:extensions',
+        group: 'Navigation',
+        label: 'View: Extensions Marketplace',
+        detail: 'Install, enable, disable, and inspect extensions',
+        action: () => {
+          onNavigate('extensions');
           onClose();
         },
       },
       {
-        id: 'act-toggle-ai',
-        label: 'Toggle AI Engineering Panel (Ctrl+J)',
-        sublabel: 'Show or hide the right-hand AI workspace',
-        kind: 'action',
-        run: () => {
-          onToggleRightPanel();
-          onClose();
-        },
-      },
-      {
-        id: 'scr-dash',
-        label: 'Go to Dashboard',
-        sublabel: 'Screen · Project health, KPIs, budget',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:dashboard',
+        group: 'Navigation',
+        label: 'View: Workspace Overview',
+        detail: 'Repositories, tasks, security, and spend overview',
+        action: () => {
           onNavigate('dashboard');
           onClose();
         },
       },
       {
-        id: 'scr-brain',
-        label: 'Go to Repository Brain & Dependency Graph',
-        sublabel: 'Screen · Knowledge graph and hybrid code search',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:brain',
+        group: 'Navigation',
+        label: 'View: Architecture & Symbol Index',
+        detail: 'Module dependency graph and hybrid search',
+        action: () => {
           onNavigate('brain');
           onClose();
         },
       },
       {
-        id: 'scr-debug',
-        label: 'Go to Debugging Center',
-        sublabel: 'Screen · Stack trace analysis and root-cause patches',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:debugging',
+        group: 'Navigation',
+        label: 'View: Diagnostics & Root Cause',
+        detail: 'Analyze stack traces and active problems',
+        action: () => {
           onNavigate('debugging');
           onClose();
         },
       },
       {
-        id: 'scr-sec',
-        label: 'Go to Security Center',
-        sublabel: 'Screen · Static CWE findings and secret scanning',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:security',
+        group: 'Navigation',
+        label: 'View: Security Center',
+        detail: 'Static CWE findings and remediation',
+        action: () => {
           onNavigate('security');
           onClose();
         },
       },
       {
-        id: 'scr-hist',
-        label: 'Go to Agent Execution History',
-        sublabel: 'Screen · Tasks, approvals, diffs, rollbacks',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:history',
+        group: 'Navigation',
+        label: 'View: Task Execution History',
+        detail: 'Inspect patches, priorities, and rollback snapshots',
+        action: () => {
           onNavigate('history');
           onClose();
         },
       },
       {
-        id: 'scr-settings',
-        label: 'Go to Governance, Policy & Usage',
-        sublabel: 'Screen · Permission matrix, Model Gateway, budget',
-        kind: 'screen',
-        run: () => {
+        id: 'nav:settings',
+        group: 'Navigation',
+        label: 'View: Settings & Desktop Runtime',
+        detail: 'Appearance, provider key, policies, and .exe packaging',
+        action: () => {
           onNavigate('settings');
+          onClose();
+        },
+      },
+      {
+        id: 'act:reindex',
+        group: 'Navigation',
+        label: 'Workspace: Rebuild AST Index',
+        detail: 'Re-parse repository symbols and dependency graph',
+        action: () => {
+          onReindex();
           onClose();
         },
       },
     ];
 
-    for (const f of project.files) {
-      base.push({
-        id: `file-${f.path}`,
-        label: f.path,
-        sublabel: `File · ${f.language} · ${f.lineCount} lines`,
-        kind: 'file',
-        run: () => {
-          onOpenFileAtLine(f.path, 1);
-          onClose();
-        },
-      });
-    }
-
-    for (const sym of project.symbols) {
-      base.push({
-        id: `sym-${sym.id}`,
-        label: sym.name,
-        sublabel: `Symbol (${sym.kind}) · ${sym.filePath}:${sym.startLine}`,
-        kind: 'symbol',
-        run: () => {
-          onOpenFileAtLine(sym.filePath, sym.startLine);
-          onClose();
-        },
-      });
+    if (project) {
+      for (const file of project.files) {
+        list.push({
+          id: `file:${file.path}`,
+          group: 'File',
+          label: file.path,
+          detail: `${file.language} · ${file.lineCount} lines`,
+          action: () => {
+            onOpenFile(file.path, 1);
+            onClose();
+          },
+        });
+      }
+      for (const sym of project.symbols.slice(0, 40)) {
+        list.push({
+          id: `sym:${sym.id}`,
+          group: 'Symbol',
+          label: `${sym.name} (${sym.kind})`,
+          detail: `${sym.filePath}:${sym.startLine}`,
+          action: () => {
+            onOpenFile(sym.filePath, sym.startLine);
+            onClose();
+          },
+        });
+      }
     }
 
     const q = query.trim().toLowerCase();
-    if (!q) return base.slice(0, 14);
-    return base
-      .filter((it) => it.label.toLowerCase().includes(q) || it.sublabel.toLowerCase().includes(q))
-      .slice(0, 14);
-  }, [
-    project.files,
-    project.symbols,
-    query,
-    onClose,
-    onLaunchMilestoneDemo,
-    onNavigate,
-    onOpenFileAtLine,
-    onRunSandboxTests,
-    onToggleRightPanel,
-  ]);
+    if (!q) return list.slice(0, 18);
+    return list
+      .filter(
+        (item) =>
+          item.label.toLowerCase().includes(q) ||
+          item.detail.toLowerCase().includes(q) ||
+          item.group.toLowerCase().includes(q)
+      )
+      .slice(0, 20);
+  }, [activeCommands, activeFilePath, project, query, onClose, onNavigate, onOpenFile, onRunExtensionCommand, onReindex]);
 
   useEffect(() => {
     setSelectedIndex(0);
@@ -188,76 +202,103 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/60 flex items-start justify-center pt-[12vh] px-4"
+      className="fixed inset-0 z-50 bg-black/40 backdrop-blur-[6px] flex items-start justify-center pt-[13vh] px-4"
       onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Command Palette"
     >
       <div
-        className="modal-animate-in w-full max-w-xl bg-[#151821] border border-[#353B50] rounded-[14px] overflow-hidden shadow-2xl"
+        className="w-full max-w-2xl apple-sheet overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-3 px-4 h-12 border-b border-[#262B3A]">
-          <Search className="w-4 h-4 text-[#6B728A] shrink-0" />
+        {/* Spotlight Search Input */}
+        <div className="px-4 h-14 border-b border-[var(--border-hairline)] flex items-center gap-3">
+          <Search className="w-5 h-5 text-[var(--ink-muted)] shrink-0" />
           <input
-            ref={inputRef}
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Escape') onClose();
               if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 setSelectedIndex((i) => Math.min(items.length - 1, i + 1));
-              } else if (e.key === 'ArrowUp') {
+              }
+              if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 setSelectedIndex((i) => Math.max(0, i - 1));
-              } else if (e.key === 'Enter' && items[selectedIndex]) {
+              }
+              if (e.key === 'Enter' && items[selectedIndex]) {
                 e.preventDefault();
-                items[selectedIndex].run();
-              } else if (e.key === 'Escape') {
-                onClose();
+                items[selectedIndex].action();
               }
             }}
-            placeholder="Search files, symbols, screens, or commands..."
-            className="flex-1 bg-transparent text-[13px] text-[#E6E9F2] placeholder-[#6B728A] outline-none"
+            autoFocus
+            placeholder="Spotlight Search — files, symbols, views, or commands..."
+            className="flex-1 bg-transparent text-[15px] font-normal text-[var(--ink-primary)] placeholder:text-[var(--ink-muted)] focus:outline-none focus:shadow-none"
           />
-          <span className="font-mono text-[11px] text-[#6B728A]">ESC</span>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[var(--ink-muted)] hover:text-[var(--ink-primary)] hover:bg-[var(--surface-hover)] transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
         </div>
 
-        <div className="max-h-80 overflow-y-auto py-1.5">
+        {/* Results */}
+        <div className="max-h-[380px] overflow-y-auto p-2 space-y-0.5">
           {items.length === 0 ? (
-            <div className="px-4 py-8 text-center text-[12px] text-[#6B728A]">
-              No matching commands, files, or symbols found.
+            <div className="px-4 py-10 text-center text-xs text-[var(--ink-muted)]">
+              No matching commands, files, or symbols.
             </div>
           ) : (
-            items.map((item, idx) => (
-              <button
-                key={item.id}
-                onMouseEnter={() => setSelectedIndex(idx)}
-                onClick={item.run}
-                className={`w-full flex items-center justify-between gap-3 px-4 py-2 text-left transition-colors duration-120 ${
-                  idx === selectedIndex ? 'bg-[#1C2030] text-[#E6E9F2]' : 'text-[#A3AABF]'
-                }`}
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  {item.kind === 'action' ? (
-                    <Play className="w-3.5 h-3.5 text-[#6C7BFF] shrink-0" />
-                  ) : item.kind === 'file' ? (
-                    <FileCode2 className="w-3.5 h-3.5 text-[#4DB8FF] shrink-0" />
-                  ) : item.kind === 'symbol' ? (
-                    <Code2 className="w-3.5 h-3.5 text-[#3DD68C] shrink-0" />
-                  ) : (
-                    <Command className="w-3.5 h-3.5 text-[#A3AABF] shrink-0" />
-                  )}
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-medium truncate font-mono">{item.label}</div>
-                    <div className="text-[11px] text-[#6B728A] truncate">{item.sublabel}</div>
+            items.map((item, idx) => {
+              const isSelected = idx === selectedIndex;
+              return (
+                <button
+                  key={item.id}
+                  type="button"
+                  onClick={item.action}
+                  onMouseEnter={() => setSelectedIndex(idx)}
+                  className={`w-full px-3 py-2 rounded-[9px] text-left flex items-center justify-between gap-3 text-[13px] transition-colors ${
+                    isSelected
+                      ? 'bg-[var(--accent-primary)] text-[var(--accent-ink)]'
+                      : 'text-[var(--ink-secondary)] hover:bg-[var(--surface-hover)]'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    {item.group === 'Extension Command' ? (
+                      <Play className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white' : 'text-[var(--accent-primary)]'}`} />
+                    ) : item.group === 'File' ? (
+                      <FileCode2 className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    ) : item.group === 'Symbol' ? (
+                      <Code2 className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    ) : (
+                      <Compass className={`w-4 h-4 shrink-0 ${isSelected ? 'text-white/90' : 'text-[var(--ink-muted)]'}`} />
+                    )}
+                    <span className={`truncate font-medium ${isSelected ? 'text-white' : 'text-[var(--ink-primary)]'}`}>
+                      {item.label}
+                    </span>
                   </div>
-                </div>
-              </button>
-            ))
+                  <span
+                    className={`text-[11px] font-mono truncate max-w-[220px] shrink-0 ${
+                      isSelected ? 'text-white/80' : 'text-[var(--ink-muted)]'
+                    }`}
+                  >
+                    {item.detail}
+                  </span>
+                </button>
+              );
+            })
           )}
+        </div>
+
+        {/* Footer */}
+        <div className="px-4 py-2 border-t border-[var(--border-hairline)] bg-[var(--surface-subtle)] flex items-center justify-between text-[11px] font-mono text-[var(--ink-muted)]">
+          <span className="inline-flex items-center gap-1.5">
+            <Blocks className="w-3.5 h-3.5 text-[var(--accent-primary)]" />
+            {activeCommands.length} active commands
+          </span>
+          <span>↑↓ Navigate · ↵ Open · Esc Dismiss</span>
         </div>
       </div>
     </div>

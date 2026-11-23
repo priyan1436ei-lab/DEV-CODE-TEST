@@ -1,0 +1,419 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Pillar 4.1: Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Hardened global primitive helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Master Gate helper: ensures parent user profile exists and belongs to the caller
+    function parentUserExists(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId)) &&
+        get(/databases/$(database)/documents/users/$(userId)).data.uid == request.auth.uid;
+    }
+
+    // Pillar 2: Validation Blueprints (matched verbatim to firebase-blueprint.json)
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'theme',
+          'preferredProvider',
+          'preferredModel',
+          'preferredBaseUrl',
+          'monthlyBudgetUsd',
+          'monthlyTokenLimit',
+          'activeProjectId',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'uid',
+          'displayName',
+          'email',
+          'photoURL',
+          'theme',
+          'preferredProvider',
+          'preferredModel',
+          'preferredBaseUrl',
+          'monthlyBudgetUsd',
+          'monthlyTokenLimit',
+          'activeProjectId',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.uid is string &&
+        data.uid == request.auth.uid &&
+        data.uid == userId &&
+        isValidId(data.uid) &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 120 &&
+        data.email is string &&
+        data.email.size() >= 3 &&
+        data.email.size() <= 254 &&
+        data.photoURL is string &&
+        data.photoURL.size() <= 512 &&
+        data.theme is string &&
+        data.theme.size() <= 10 &&
+        data.theme in ['dark', 'light'] &&
+        data.preferredProvider is string &&
+        data.preferredProvider.size() <= 32 &&
+        data.preferredProvider in ['openai', 'openrouter', 'anthropic', 'groq', 'deepseek', 'ollama', 'custom'] &&
+        data.preferredModel is string &&
+        data.preferredModel.size() <= 120 &&
+        data.preferredBaseUrl is string &&
+        data.preferredBaseUrl.size() <= 256 &&
+        data.monthlyBudgetUsd is number &&
+        data.monthlyBudgetUsd >= 1 &&
+        data.monthlyBudgetUsd <= 100000 &&
+        data.monthlyTokenLimit is number &&
+        data.monthlyTokenLimit >= 10000 &&
+        data.monthlyTokenLimit <= 1000000000 &&
+        data.activeProjectId is string &&
+        data.activeProjectId.size() <= 128 &&
+        (data.activeProjectId == '' || isValidId(data.activeProjectId)) &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidExtensionPref(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'extensionId',
+          'displayName',
+          'version',
+          'installed',
+          'enabled',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'extensionId',
+          'displayName',
+          'version',
+          'installed',
+          'enabled',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidId(data.ownerId) &&
+        data.extensionId is string &&
+        data.extensionId.size() >= 1 &&
+        data.extensionId.size() <= 128 &&
+        data.extensionId.matches('^[a-zA-Z0-9._\\-]+$') &&
+        data.displayName is string &&
+        data.displayName.size() >= 1 &&
+        data.displayName.size() <= 120 &&
+        data.version is string &&
+        data.version.size() >= 1 &&
+        data.version.size() <= 32 &&
+        data.installed is bool &&
+        data.enabled is bool &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidTaskRecord(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'projectId',
+          'projectName',
+          'title',
+          'description',
+          'priority',
+          'status',
+          'executionMode',
+          'modelName',
+          'actualCostUsd',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'projectId',
+          'projectName',
+          'title',
+          'description',
+          'priority',
+          'status',
+          'executionMode',
+          'modelName',
+          'actualCostUsd',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidId(data.ownerId) &&
+        data.projectId is string &&
+        isValidId(data.projectId) &&
+        data.projectName is string &&
+        data.projectName.size() >= 1 &&
+        data.projectName.size() <= 120 &&
+        data.title is string &&
+        data.title.size() >= 1 &&
+        data.title.size() <= 200 &&
+        data.description is string &&
+        data.description.size() <= 4000 &&
+        data.priority is string &&
+        data.priority.size() <= 16 &&
+        data.priority in ['high', 'medium', 'low'] &&
+        data.status is string &&
+        data.status.size() <= 32 &&
+        data.status in ['pending', 'planning', 'awaiting_approval', 'running', 'completed', 'failed', 'cancelled'] &&
+        data.executionMode is string &&
+        data.executionMode.size() <= 16 &&
+        data.executionMode in ['approval', 'direct'] &&
+        data.modelName is string &&
+        data.modelName.size() <= 120 &&
+        data.actualCostUsd is number &&
+        data.actualCostUsd >= 0 &&
+        data.actualCostUsd <= 100000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    function isValidProjectSummary(data, userId) {
+      return data.keys().hasAll([
+          'ownerId',
+          'name',
+          'description',
+          'localPath',
+          'framework',
+          'primaryLanguage',
+          'fileCount',
+          'symbolCount',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.keys().hasOnly([
+          'ownerId',
+          'name',
+          'description',
+          'localPath',
+          'framework',
+          'primaryLanguage',
+          'fileCount',
+          'symbolCount',
+          'createdAt',
+          'updatedAt'
+        ]) &&
+        data.ownerId is string &&
+        data.ownerId == request.auth.uid &&
+        data.ownerId == userId &&
+        isValidId(data.ownerId) &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 120 &&
+        data.description is string &&
+        data.description.size() <= 500 &&
+        data.localPath is string &&
+        data.localPath.size() <= 260 &&
+        data.framework is string &&
+        data.framework.size() <= 80 &&
+        data.primaryLanguage is string &&
+        data.primaryLanguage.size() <= 40 &&
+        data.fileCount is number &&
+        data.fileCount >= 0 &&
+        data.fileCount <= 100000 &&
+        data.symbolCount is number &&
+        data.symbolCount >= 0 &&
+        data.symbolCount <= 1000000 &&
+        data.createdAt is timestamp &&
+        data.updatedAt is timestamp;
+    }
+
+    // Collection: /users/{userId} (PII strictly isolated to owner; list forbidden)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if false;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isOwner(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        isValidUserProfile(incoming(), userId) &&
+        isOwner(userId) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time && (
+          // Action: Update workspace preferences or profile display
+          incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName',
+            'email',
+            'photoURL',
+            'theme',
+            'preferredProvider',
+            'preferredModel',
+            'preferredBaseUrl',
+            'monthlyBudgetUsd',
+            'monthlyTokenLimit',
+            'activeProjectId',
+            'updatedAt'
+          ])
+        );
+
+      allow delete: if isValidId(userId) && isOwner(userId);
+
+      // Subcollection: /users/{userId}/extensions/{extensionDocId}
+      match /extensions/{extensionDocId} {
+        allow get: if isValidId(userId) && isValidId(extensionDocId) && isOwner(userId) && parentUserExists(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(extensionDocId) &&
+          isOwner(userId) &&
+          isValidExtensionPref(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(extensionDocId) &&
+          isValidExtensionPref(incoming(), userId) &&
+          isOwner(userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().extensionId == existing().extensionId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId) && (
+            // Action: Toggle or update installed extension state
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName',
+              'version',
+              'installed',
+              'enabled',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isValidId(userId) && isValidId(extensionDocId) && isOwner(userId) && parentUserExists(userId);
+      }
+
+      // Subcollection: /users/{userId}/taskRecords/{taskId}
+      match /taskRecords/{taskId} {
+        allow get: if isValidId(userId) && isValidId(taskId) && isOwner(userId) && parentUserExists(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          isOwner(userId) &&
+          isValidTaskRecord(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(taskId) &&
+          isValidTaskRecord(incoming(), userId) &&
+          isOwner(userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().projectId == existing().projectId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId) && (
+            // Action: Triage priority (allowed anytime, does not mutate terminal status)
+            (
+              incoming().status == existing().status &&
+              incoming().diff(existing()).affectedKeys().hasOnly(['priority', 'updatedAt'])
+            ) ||
+            // Action: Transition active task lifecycle state (Terminal State Locking enforced)
+            (
+              existing().status in ['pending', 'planning', 'awaiting_approval', 'running'] &&
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'status',
+                'priority',
+                'actualCostUsd',
+                'modelName',
+                'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isValidId(userId) && isValidId(taskId) && isOwner(userId) && parentUserExists(userId);
+      }
+
+      // Subcollection: /users/{userId}/savedProjects/{projectId}
+      match /savedProjects/{projectId} {
+        allow get: if isValidId(userId) && isValidId(projectId) && isOwner(userId) && parentUserExists(userId);
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+
+        allow create: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(projectId) &&
+          isOwner(userId) &&
+          isValidProjectSummary(incoming(), userId) &&
+          incoming().createdAt == request.time &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId);
+
+        allow update: if isVerifiedUser() &&
+          isValidId(userId) &&
+          isValidId(projectId) &&
+          isValidProjectSummary(incoming(), userId) &&
+          isOwner(userId) &&
+          incoming().ownerId == existing().ownerId &&
+          incoming().createdAt == existing().createdAt &&
+          incoming().updatedAt == request.time &&
+          parentUserExists(userId) && (
+            // Action: Sync updated repository AST metadata
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'name',
+              'description',
+              'localPath',
+              'framework',
+              'primaryLanguage',
+              'fileCount',
+              'symbolCount',
+              'updatedAt'
+            ])
+          );
+
+        allow delete: if isValidId(userId) && isValidId(projectId) && isOwner(userId) && parentUserExists(userId);
+      }
+    }
+  }
+}

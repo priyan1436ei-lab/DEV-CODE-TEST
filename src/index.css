@@ -1,73 +1,150 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Apple macOS Sequoia — Light Porcelain Material Tokens */
 :root {
-  /* Section 5 Design System Color Tokens */
-  --bg-app: #0D0F14;
-  --bg-panel: #151821;
-  --bg-panel-raised: #1C2030;
-  --bg-editor: #0F1117;
-  --border-subtle: #262B3A;
-  --border-strong: #353B50;
-  --text-primary: #E6E9F2;
-  --text-secondary: #A3AABF;
-  --text-muted: #6B728A;
-  --accent-primary: #6C7BFF;
-  --accent-hover: #8793FF;
-  --accent-glow: rgba(108, 123, 255, 0.25);
-  --success: #3DD68C;
-  --warning: #F5B84B;
-  --danger: #FF5C6C;
-  --info: #4DB8FF;
-  --testing: #B38CFF;
-  --diff-add-bg: rgba(61, 214, 140, 0.14);
-  --diff-remove-bg: rgba(255, 92, 108, 0.14);
-
-  /* Severity Colors */
-  --severity-critical: #FF3B4E;
-  --severity-high: #FF7A45;
-  --severity-medium: #F5B84B;
-  --severity-low: #4DB8FF;
-  --severity-info: #8A93AD;
-
-  /* Radii */
-  --radius-control: 6px;
-  --radius-card: 10px;
-  --radius-modal: 14px;
-
-  /* Typography */
-  --font-ui: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  color-scheme: light;
+  --surface-canvas: #ffffff;
+  --surface-chrome: rgba(246, 246, 248, 0.86);
+  --surface-sidebar: #f2f2f7;
+  --surface-elevated: #ffffff;
+  --surface-subtle: #f5f5f7;
+  --surface-hover: rgba(0, 0, 0, 0.045);
+  --surface-active: rgba(0, 122, 255, 0.12);
+  --border-hairline: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.14);
+  --ink-primary: #1d1d1f;
+  --ink-secondary: #515154;
+  --ink-muted: #86868b;
+  --accent-primary: #007aff;
+  --accent-hover: #0066d6;
+  --accent-soft: rgba(0, 122, 255, 0.12);
+  --accent-ink: #ffffff;
+  --status-success: #1d9a32;
+  --status-warning: #c47600;
+  --status-danger: #d70015;
+  --status-info: #007aff;
+  --shadow-apple-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
+  --shadow-apple-md: 0 12px 32px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.06);
+  --shadow-apple-sheet: 0 24px 64px rgba(0, 0, 0, 0.18), 0 4px 16px rgba(0, 0, 0, 0.08);
+  --apple-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-@layer base {
-  html, body, #root {
-    height: 100%;
-    margin: 0;
-    padding: 0;
-    background-color: var(--bg-app);
-    color: var(--text-primary);
-    font-family: var(--font-ui);
-    font-size: 13px;
-    line-height: 1.5;
-    letter-spacing: 0.005em;
-    overflow: hidden;
-  }
-
-  code, pre, .font-mono {
-    font-family: var(--font-mono);
-  }
-
-  *:focus-visible {
-    outline: 2px solid var(--accent-primary);
-    outline-offset: 1px;
-  }
+/* Apple macOS Sequoia — Dark Obsidian Material Tokens */
+.dark {
+  color-scheme: dark;
+  --surface-canvas: #161618;
+  --surface-chrome: rgba(28, 28, 30, 0.84);
+  --surface-sidebar: #1c1c1f;
+  --surface-elevated: #242427;
+  --surface-subtle: #1b1b1e;
+  --surface-hover: rgba(255, 255, 255, 0.065);
+  --surface-active: rgba(10, 132, 255, 0.20);
+  --border-hairline: rgba(255, 255, 255, 0.085);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --ink-primary: #f5f5f7;
+  --ink-secondary: #aeaeb2;
+  --ink-muted: #7c7c82;
+  --accent-primary: #0a84ff;
+  --accent-hover: #409cff;
+  --accent-soft: rgba(10, 132, 255, 0.18);
+  --accent-ink: #ffffff;
+  --status-success: #30d158;
+  --status-warning: #ff9f0a;
+  --status-danger: #ff453a;
+  --status-info: #64d2ff;
+  --shadow-apple-sm: 0 1px 3px rgba(0, 0, 0, 0.32), inset 0 0.5px 0 rgba(255, 255, 255, 0.06);
+  --shadow-apple-md: 0 16px 40px rgba(0, 0, 0, 0.48), inset 0 0.5px 0 rgba(255, 255, 255, 0.08);
+  --shadow-apple-sheet: 0 32px 80px rgba(0, 0, 0, 0.62), inset 0 0.5px 0 rgba(255, 255, 255, 0.1);
+  --apple-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-.tabular-nums {
-  font-variant-numeric: tabular-nums;
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background-color: var(--surface-canvas);
+  color: var(--ink-primary);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
 }
 
-/* Custom subtle dark scrollbars */
+/* Electron frameless titlebar drag utilities */
+.win-drag-region {
+  -webkit-app-region: drag;
+}
+
+.win-no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/* Apple Translucent Vibrancy Surfaces */
+.apple-vibrancy {
+  background-color: var(--surface-chrome);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+
+.apple-popover {
+  background-color: var(--surface-elevated);
+  backdrop-filter: saturate(180%) blur(24px);
+  -webkit-backdrop-filter: saturate(180%) blur(24px);
+  box-shadow: var(--shadow-apple-md);
+}
+
+.apple-card {
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border-hairline);
+  border-radius: 12px;
+  box-shadow: var(--shadow-apple-sm);
+}
+
+.apple-sheet {
+  background-color: var(--surface-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  box-shadow: var(--shadow-apple-sheet);
+}
+
+/* Apple Segmented Control */
+.apple-segmented {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 9px;
+  background-color: var(--surface-hover);
+  border: 1px solid var(--border-hairline);
+}
+
+.apple-segmented-item {
+  border-radius: 7px;
+  transition: background-color 180ms var(--apple-ease), color 180ms var(--apple-ease), box-shadow 180ms var(--apple-ease);
+}
+
+.apple-segmented-item[data-active="true"] {
+  background-color: var(--surface-elevated);
+  color: var(--ink-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.14), 0 0 0 0.5px var(--border-hairline);
+}
+
+/* Apple Input Focus Ring */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Refined macOS Overlay Scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -78,97 +155,68 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border-subtle);
-  border-radius: 4px;
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
+  background: var(--ink-muted);
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
 
-/* Section 5 Animation Durations */
-@keyframes approvalPulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 var(--accent-glow), inset 0 0 0 1px rgba(245, 184, 75, 0.45);
+/* Sidebar File Tree Git-Status Pulse & Smooth Transitions */
+@keyframes git-status-row-pulse {
+  0% {
+    background-color: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent-primary);
   }
-  50% {
-    box-shadow: 0 0 18px 2px var(--accent-glow), inset 0 0 0 1px rgba(245, 184, 75, 0.85);
+  45% {
+    background-color: rgba(255, 159, 10, 0.14);
+    box-shadow: inset 2px 0 0 var(--status-warning);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: inset 0 0 0 transparent;
   }
 }
 
-.approval-card-pulse {
-  animation: approvalPulse 2000ms ease-in-out infinite;
-}
-
-@keyframes cursorBlink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
-}
-
-.streaming-cursor {
-  display: inline-block;
-  width: 6px;
-  height: 14px;
-  background-color: var(--accent-primary);
-  vertical-align: text-bottom;
-  margin-left: 2px;
-  animation: cursorBlink 1000ms step-end infinite;
-}
-
-@keyframes skeletonShimmer {
-  0% { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-
-.skeleton-shimmer {
-  background: linear-gradient(90deg, var(--bg-panel) 25%, var(--bg-panel-raised) 50%, var(--bg-panel) 75%);
-  background-size: 200% 100%;
-  animation: skeletonShimmer 1400ms linear infinite;
-}
-
-@keyframes modalIn {
-  from {
-    opacity: 0;
-    transform: scale(0.97);
-  }
-  to {
-    opacity: 1;
+@keyframes git-badge-pulse {
+  0% {
     transform: scale(1);
+    opacity: 0.7;
   }
-}
-
-.modal-animate-in {
-  animation: modalIn 180ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
-}
-
-@keyframes toastIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
+  40% {
+    transform: scale(1.24);
     opacity: 1;
-    transform: translateY(0);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
   }
 }
 
-.toast-animate-in {
-  animation: toastIn 220ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+.file-tree-item {
+  transition:
+    background-color 220ms var(--apple-ease),
+    color 180ms var(--apple-ease),
+    box-shadow 260ms var(--apple-ease);
 }
 
-@keyframes lineHighlightFlash {
-  0% { background-color: rgba(108, 123, 255, 0.32); }
-  100% { background-color: transparent; }
+.file-tree-git-pulse {
+  animation: git-status-row-pulse 900ms var(--apple-ease) 1;
 }
 
-.line-flash {
-  animation: lineHighlightFlash 1600ms ease-out forwards;
+.git-badge-pulse {
+  display: inline-flex;
+  animation: git-badge-pulse 650ms var(--apple-ease) 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+  .file-tree-git-pulse,
+  .git-badge-pulse {
+    animation: none !important;
   }
 }

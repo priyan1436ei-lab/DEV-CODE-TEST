@@ -1,0 +1,27 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Global default deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedInOwner(userId) {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.uid == userId;
+    }
+
+    // Per-user project image/asset storage strictly isolated by Firebase Auth UID
+    match /users/{userId}/projects/{projectId}/assets/{assetId} {
+      allow read: if isSignedInOwner(userId);
+      allow write: if isSignedInOwner(userId)
+        && request.resource != null
+        && request.resource.size > 0
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg|webp|gif|svg\\+xml)');
+      allow delete: if isSignedInOwner(userId);
+    }
+  }
+}

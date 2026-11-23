@@ -33,18 +33,20 @@ export const BottomSandboxPanel: React.FC<BottomSandboxPanelProps> = ({
   onRunTests,
   onClose,
 }) => {
+  const safeRuns = Array.isArray(testRuns) ? testRuns : [];
+  const safeAudit = Array.isArray(auditLogs) ? auditLogs : [];
   const [activeTab, setActiveTab] = useState<'tests' | 'output' | 'audit'>('tests');
   const [showCoverageBreakdown, setShowCoverageBreakdown] = useState(false);
-  const latestRun = testRuns[0] ?? null;
+  const latestRun = safeRuns[0] ?? null;
   const coverage = latestRun?.coverage ?? null;
 
   return (
     <section
       aria-label="Sandbox Terminal and Verification Output"
-      className="flex flex-col h-full bg-[#151821] border-t border-[#262B3A]"
+      className="flex flex-col h-full bg-[#10131C] border-t border-[#1E2433]"
     >
       {/* Header Bar */}
-      <div className="flex items-center justify-between px-3 h-9 border-b border-[#262B3A] shrink-0 gap-3">
+      <div className="flex items-center justify-between px-3 h-9 border-b border-[#1E2433] shrink-0 gap-3">
         <div className="flex items-center gap-1 min-w-0">
           <button
             onClick={() => setActiveTab('tests')}
@@ -82,7 +84,7 @@ export const BottomSandboxPanel: React.FC<BottomSandboxPanelProps> = ({
             }`}
           >
             <Shield className="w-3.5 h-3.5 text-[#F5B84B]" />
-            <span>Audit Log ({auditLogs.length})</span>
+            <span>Audit Log ({safeAudit.length})</span>
           </button>
         </div>
 
@@ -298,7 +300,7 @@ export const BottomSandboxPanel: React.FC<BottomSandboxPanelProps> = ({
 
         {activeTab === 'audit' && (
           <div className="divide-y divide-[#262B3A]/70">
-            {auditLogs.map((entry) => (
+            {safeAudit.map((entry) => (
               <div key={entry.id} className="py-1.5 flex items-baseline justify-between gap-4">
                 <div className="min-w-0">
                   <span className="text-[#8793FF] mr-2">{entry.eventType}</span>

@@ -1,0 +1,66 @@
+name: Build & Release Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install dependencies
+        run: npm install && npm install -D electron electron-builder
+
+      - name: Build production web & PWA assets
+        run: npm run build
+
+      - name: Bundle standalone zero-dependency Electron backend server
+        env:
+          DEVMIND_EMBEDDED: "1"
+        run: npm run build:server && node -e "const m = require('./dist-server/server.cjs'); if (typeof m.startServer !== 'function') process.exit(1);"
+
+      - name: Ensure Windows icon resources exist
+        run: node scripts/ensure-win-icon.mjs
+
+      - name: Run full end-to-end production & packaging verification suite
+        run: npm test
+
+      - name: Build Windows Installer & Portable EXE (with optional Trusted CA Code Signing)
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: |
+          if ($env:CSC_LINK) {
+            Write-Host "Trusted CA certificate detected: enforcing Authenticode code signing."
+            npx electron-builder --win --x64 --config electron-builder.yml --publish never -c.forceCodeSigning=true
+          } else {
+            Write-Host "No WINDOWS_CSC_LINK secret configured: building unsigned test installers. Add WINDOWS_CSC_LINK and WINDOWS_CSC_KEY_PASSWORD repository secrets for Trusted Publisher / Smart App Control signing."
+            npx electron-builder --win --x64 --config electron-builder.yml --publish never
+          }
+
+      - name: Upload Windows EXE workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: devmind-studio-windows-exe
+          path: dist-electron/*.exe
+
+      - name: Publish GitHub Release on version tags
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist-electron/*.exe
+          generate_release_notes: true
