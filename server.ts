@@ -281,7 +281,10 @@ export async function startServer(
 
   app.post('/api/v1/auth/logout', (req, res) => {
     const token = extractBearerToken(req);
-    if (token) store.deleteSession(token);
+    if (token) {
+      store.deleteSession(token);
+      githubService.clearSessionAuth(token);
+    }
     res.json({ ok: true });
   });
 

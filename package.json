@@ -12,9 +12,10 @@
     "dev": "tsx server.ts",
     "start": "node server.ts",
     "build": "vite build",
+    "build:strict": "node -e \"process.env.STRICT_POLICY_MODE='1'; require('node:child_process').execSync('npx vite build', { stdio: 'inherit', env: process.env });\"",
     "build:server": "node scripts/build-server.mjs",
-    "test": "node scripts/test-e2e-workflows.mjs",
-    "build:win": "npm run build && npm run build:server && node scripts/ensure-win-icon.mjs && npm test && electron-builder --win --x64 --config electron-builder.yml --publish never",
+    "test": "node scripts/test-e2e-workflows.mjs && node scripts/test-hybrid-architecture.mjs",
+    "build:win": "npm run build:strict && npm run build:server && node scripts/ensure-win-icon.mjs && npm test && electron-builder --win --x64 --config electron-builder.yml --publish never",
     "preview": "vite preview",
     "clean": "rm -rf dist dist-server dist-electron server.js",
     "lint": "tsc --noEmit"

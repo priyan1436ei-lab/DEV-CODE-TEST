@@ -701,6 +701,49 @@ export function App() {
     }
   }, [activeProject, pendingSyncFiles]);
 
+  // Track gitStatus / syncStatus transitions per file to trigger subtle pulse animation in sidebar tree
+  useEffect(() => {
+    if (!activeProject) return;
+    const prev = prevGitStatusRef.current;
+    const nextMap = new Map<string, string>();
+    const changedPaths: string[] = [];
+
+    for (const file of activeProject.files) {
+      const isPending =
+        pendingSyncFiles.has(`${activeProject.id}:${file.path}`) ||
+        file.syncStatus === 'pending-sync';
+      const sig = `${file.gitStatus}:${isPending ? 'pending' : 'synced'}`;
+      nextMap.set(file.path, sig);
+
+      if (prev.projectId === activeProject.id) {
+        const oldSig = prev.statuses.get(file.path);
+        if (oldSig !== undefined && oldSig !== sig) {
+          changedPaths.push(file.path);
+        } else if (oldSig === undefined && prev.statuses.size > 0) {
+          changedPaths.push(file.path);
+        }
+      }
+    }
+
+    prevGitStatusRef.current = { projectId: activeProject.id, statuses: nextMap };
+
+    if (changedPaths.length > 0) {
+      setPulsingFiles((curr) => {
+        const updated = new Set(curr);
+        for (const p of changedPaths) updated.add(p);
+        return updated;
+      });
+      const timer = window.setTimeout(() => {
+        setPulsingFiles((curr) => {
+          const updated = new Set(curr);
+          for (const p of changedPaths) updated.delete(p);
+          return updated;
+        });
+      }, 950);
+      return () => window.clearTimeout(timer);
+    }
+  }, [activeProject, pendingSyncFiles]);
+
   const handleSelectProject = async (projectId: string) => {
     setActiveProjectId(projectId);
     setPendingDiff(null);
@@ -1944,6 +1987,26 @@ export function App() {
                 }}
                 onReindex={handleReindex}
                 onOpenFileLine={handleOpenFileLine}
+              />
+            )}
+
+            {screen === 'github' && (
+              <GitHubSyncView
+                project={activeProject}
+                isOnline={isOnline}
+                pendingSyncFiles={pendingSyncFiles}
+                onProjectUpdated={(updatedProject) => {
+                  setProjects((prev) =>
+                    dedupeById(prev.map((p) => (p.id === updatedProject.id ? updatedProject : p)))
+                  );
+                  if (firebaseUidRef.current) {
+                    syncProjectSummaryToFirestore(firebaseUidRef.current, updatedProject).catch(
+                      () => {}
+                    );
+                  }
+                }}
+                onOpenFile={(filePath) => handleOpenFileLine(filePath, 1)}
+                onNotify={showToast}
               />
             )}
 

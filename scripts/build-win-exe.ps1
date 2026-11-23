@@ -9,7 +9,8 @@ npm install
 Write-Host "[2/5] Installing Electron & electron-builder..." -ForegroundColor Cyan
 npm install -D electron electron-builder
 
-Write-Host "[3/5] Building production web assets, standalone backend bundle & Windows icons..." -ForegroundColor Cyan
+Write-Host "[3/5] Building production web assets (STRICT_POLICY_MODE=1), standalone backend bundle & Windows icons..." -ForegroundColor Cyan
+$env:STRICT_POLICY_MODE = "1"
 npm run build
 npm run build:server
 node scripts/ensure-win-icon.mjs

@@ -51,8 +51,11 @@ function isConnectivityError(err: unknown): boolean {
 
 export class HybridAiRouter {
   public ollama = new OllamaRuntime();
+  private readonly gateway: ModelGateway;
 
-  constructor(private readonly gateway: ModelGateway) {}
+  constructor(gateway: ModelGateway) {
+    this.gateway = gateway;
+  }
 
   public static defaultLocalConfig(): LocalAiConfig {
     return {

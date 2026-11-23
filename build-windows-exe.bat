@@ -21,7 +21,8 @@ echo [2/5] Installing Electron and electron-builder...
 call npm install -D electron electron-builder
 if errorlevel 1 goto :error
 
-echo [3/5] Compiling web assets, standalone backend server, and Windows icons...
+echo [3/5] Compiling web assets (STRICT_POLICY_MODE=1), standalone backend server, and Windows icons...
+set STRICT_POLICY_MODE=1
 call npm run build
 if errorlevel 1 goto :error
 call npm run build:server

@@ -14,6 +14,13 @@ if (!gotLock) {
 
 app.setAppUserModelId('com.devmind.studio');
 
+// Use standard Chromium User-Agent so Google Sign-In OAuth popups work cleanly in normal Windows .exe builds
+if (typeof app.userAgentFallback === 'string' && app.userAgentFallback) {
+  app.userAgentFallback = app.userAgentFallback
+    .replace(/\s*Electron\/[^\s]+/gi, '')
+    .replace(/\s*devmind-ai\/[^\s]+/gi, '');
+}
+
 let embeddedHttpServer = null;
 let serverModuleRef = null;
 let backendPort = null;
